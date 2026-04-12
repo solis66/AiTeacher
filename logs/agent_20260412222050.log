@@ -1,0 +1,1 @@
+2026-04-12 22:20:50,183 - agent - ERROR - prompt_loader.py:16 - [load_system_prompts]解析系统提示词出错, [Errno 2] No such file or directory: 'C:\\Users\\20931\\Desktop\\AiTeachers\\prompts/main.prompt.txt'
