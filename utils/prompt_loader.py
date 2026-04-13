@@ -2,7 +2,7 @@ from utils.config_handler import prompts_conf
 from utils.logger_handler import logger
 from utils.path_tool import get_abs_path
 
-
+# 系统提示词加载
 def load_system_prompts():
     try:
         system_prompts_path = get_abs_path(prompts_conf["main_prompt_path"])
@@ -16,6 +16,7 @@ def load_system_prompts():
         logger.error(f"[load_system_prompts]解析系统提示词出错, {str(e)}")
         raise e
 
+# rag检索词加载
 def load_rag_prompts():
     try:
         rag_prompts_path = get_abs_path(prompts_conf["rag_summarize_prompt_path"])
@@ -29,6 +30,7 @@ def load_rag_prompts():
         logger.error(f"[load_rag_prompts]解析RAG提示词出错, {str(e)}")
         raise e
 
+# 日志报告提示词加载
 def load_report_prompts():
     try:
         report_prompts_path = get_abs_path(prompts_conf["report_prompt_path"])
