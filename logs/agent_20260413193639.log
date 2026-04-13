@@ -1,0 +1,27 @@
+2026-04-13 19:36:39,497 - agent - ERROR - vector_store.py:102 - [加载知识库]C:\Users\20931\Desktop\AiTeachers\data\议论文（初中）评分标准.txt加载失败：'str' object has no attribute 'page_content'
+Traceback (most recent call last):
+  File "C:\Users\20931\Desktop\AiTeachers\rag\vector_store.py", line 85, in load_document
+    split_document: list[Document] = self.spliter.split_documents(documents)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\20931\AppData\Roaming\Python\Python311\site-packages\langchain_text_splitters\base.py", line 142, in split_documents
+    texts.append(doc.page_content)
+                 ^^^^^^^^^^^^^^^^
+AttributeError: 'str' object has no attribute 'page_content'
+2026-04-13 19:36:39,532 - agent - ERROR - vector_store.py:102 - [加载知识库]C:\Users\20931\Desktop\AiTeachers\data\记叙文（初中）评分标准.txt加载失败：'str' object has no attribute 'page_content'
+Traceback (most recent call last):
+  File "C:\Users\20931\Desktop\AiTeachers\rag\vector_store.py", line 85, in load_document
+    split_document: list[Document] = self.spliter.split_documents(documents)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\20931\AppData\Roaming\Python\Python311\site-packages\langchain_text_splitters\base.py", line 142, in split_documents
+    texts.append(doc.page_content)
+                 ^^^^^^^^^^^^^^^^
+AttributeError: 'str' object has no attribute 'page_content'
+2026-04-13 19:36:39,534 - agent - ERROR - vector_store.py:102 - [加载知识库]C:\Users\20931\Desktop\AiTeachers\data\说明文（初中）评分标准.txt加载失败：'str' object has no attribute 'page_content'
+Traceback (most recent call last):
+  File "C:\Users\20931\Desktop\AiTeachers\rag\vector_store.py", line 85, in load_document
+    split_document: list[Document] = self.spliter.split_documents(documents)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\20931\AppData\Roaming\Python\Python311\site-packages\langchain_text_splitters\base.py", line 142, in split_documents
+    texts.append(doc.page_content)
+                 ^^^^^^^^^^^^^^^^
+AttributeError: 'str' object has no attribute 'page_content'

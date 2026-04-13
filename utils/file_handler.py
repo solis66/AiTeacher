@@ -54,4 +54,4 @@ def listdir_with_allowed_type(path: str, allowed_types: tuple[str]):
 #     return PyPDFLoader(filepath, password).load()
 
 def txt_loader(filepath: str) -> list[Document]:
-    return TextLoader(filepath).load()
+    return TextLoader(filepath, encoding="utf-8").load()
