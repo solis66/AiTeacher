@@ -1,0 +1,3 @@
+2026-04-15 11:01:54,751 - agent - INFO - vector_store.py:98 - [加载知识库]C:\Users\20931\Desktop\AiTeachers\data\议论文（初中）评分标准.txt内容加载成功
+2026-04-15 11:01:54,752 - agent - INFO - vector_store.py:75 - [记载知识库]C:\Users\20931\Desktop\AiTeachers\data\记叙文（初中）评分标准.txt内容已经存在知识库，跳过
+2026-04-15 11:01:55,571 - agent - INFO - vector_store.py:98 - [加载知识库]C:\Users\20931\Desktop\AiTeachers\data\说明文（初中）评分标准.txt内容加载成功
