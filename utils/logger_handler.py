@@ -51,8 +51,8 @@ def get_logger(
 logger = get_logger()
 
 
-if __name__ == '__main__':
-    logger.info("信息日志")
-    logger.error("错误日志")
-    logger.warning("警告日志")
-    logger.debug("调式日志")
+# if __name__ == '__main__':
+#     logger.info("信息日志")
+#     logger.error("错误日志")
+#     logger.warning("警告日志")
+#     logger.debug("调式日志")

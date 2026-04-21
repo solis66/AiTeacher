@@ -44,5 +44,5 @@ def load_report_prompts():
         logger.error(f"[load_report_prompts]解析报告生成提示词出错, {str(e)}")
         raise e
 
-if __name__ == '__main__':
-    print(load_system_prompts())
+# if __name__ == '__main__':
+#     print(load_system_prompts())

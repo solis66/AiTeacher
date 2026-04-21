@@ -1,0 +1,7 @@
+2026-04-21 10:22:26,200 - agent - INFO - middleware.py:34 - [log_before_model]即将调用模型，带有1条消息
+2026-04-21 10:22:26,200 - agent - DEBUG - middleware.py:36 - [log_before_model]HumanMessage | 初中生如何写好一篇说明文？
+2026-04-21 10:22:28,202 - agent - INFO - middleware.py:18 - [tool monitor]执行工具rag_summarize
+2026-04-21 10:22:28,203 - agent - INFO - middleware.py:19 - [tool monitor]传入参数{'query': '初中生如何写好一篇说明文'}
+2026-04-21 10:22:31,488 - agent - INFO - middleware.py:23 - [tool monitor]工具rag_summarize调用成功
+2026-04-21 10:22:31,490 - agent - INFO - middleware.py:34 - [log_before_model]即将调用模型，带有3条消息
+2026-04-21 10:22:31,490 - agent - DEBUG - middleware.py:36 - [log_before_model]ToolMessage | 初中生写好说明文需做到：明确说明对象，抓住事物特征；合理安排说明顺序，如时间、空间或逻辑顺序；运用恰当的说明方法，如举例子、列数字、作比较等；语言准确、简洁、通俗易懂。

@@ -102,18 +102,19 @@ class VectorStoreService:
                 logger.error(f"[加载知识库]{path}加载失败：{str(e)}", exc_info=True)
                 continue
 
-if __name__ == '__main__':
-    vs = VectorStoreService()
 
-    vs.load_document()
-
-    retriever = vs.get_retriever()
-
-    res = retriever.invoke("字数")
-
-    for r in res:
-        print(r.page_content)
-        print("-"*20)
+# if __name__ == '__main__':
+#     vs = VectorStoreService()
+#
+#     vs.load_document()
+#
+#     retriever = vs.get_retriever()
+#
+#     res = retriever.invoke("字数")
+#
+#     for r in res:
+#         print(r.page_content)
+#         print("-"*20)
 
 
 

@@ -50,7 +50,7 @@ class RagSummarizeService(object):
         )
 
 
-if __name__ == '__main__':
-    rag = RagSummarizeService()
-
-    print(rag.rag_summarize("初中生如何写好一篇记叙文"))
+# if __name__ == '__main__':
+#     rag = RagSummarizeService()
+#
+#     print(rag.rag_summarize("初中生如何写好一篇记叙文"))
