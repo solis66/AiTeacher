@@ -34,17 +34,62 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
+  transition: all 0.3s ease-in-out;
 }
 
 .sidebar-header {
-  margin-bottom: 20px;
+  display: flex;
+  align-items: baseline;  /* 改为基线对齐 */
+  justify-content: space-between;
+  gap: 8px;  /* 添加间距 */
+}
+
+.sidebar-hidden {
+  width: 24px; /* 只保留按钮宽度 */
+  overflow: hidden;
+}
+
+.sidebar-hidden .sidebar-header h1,
+.sidebar-hidden .new-chat-btn,
+.sidebar-hidden .history-section,
+.sidebar-hidden .user-info-sidebar {
+  display: none;
+}
+
+.sidebar-hidden .sidebar-toggle-btn {
+  display: block;
+  position: static;
+  margin: 0;
+}
+
+.sidebar-toggle-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid #e0e0e0;
+  background-color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.3s;
+  align-self: center;  /* 在 flex 容器中垂直居中 */
+  margin: 0;  /* 移除默认 margin */
+}
+
+button {
+  margin: 0;  /* 移除按钮的默认 margin */
+  padding: 0;  /* 移除按钮的默认 padding */
+}
+
+.sidebar-toggle-btn:hover {
+  background-color: #f0f0f0;
 }
 
 .system-title {
   font-size: 20px;
   font-weight: 600;
   color: #1a73e8;
-  margin-bottom: 20px;
+  margin: 0;  /* 确保没有margin */
+  line-height: 1.5;  /* 设置合理的行高 */
 }
 
 .new-chat-btn {
@@ -138,8 +183,8 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
+  height: 100vh;
   overflow: hidden;
-  background-color: #f5f5f5;
 }
 
 .welcome-message {
@@ -149,6 +194,7 @@ body {
   align-items: center;
   justify-content: center;
   padding: 40px;
+  height: calc(100vh - 120px);
 }
 
 .welcome-icon {
@@ -194,15 +240,24 @@ body {
   background-color: #1557b0;
 }
 
-/* 输入区域 */
+/* 输入区域样式 */
 .input-area {
-  width: 600px;
+  position: fixed;
+  bottom: 20px;
+  left: 260px;
+  right: 20px;
+  width: auto;
   background-color: #fff;
   border: 1px solid #e0e0e0;
   border-radius: 12px;
   box-shadow: 0 2px 10px rgba(0,0,0,0.1);
   padding: 16px;
-  position: relative;
+  z-index: 100;
+}
+
+/* 侧边栏折叠时 */
+.main-container.sidebar-collapsed .input-area {
+  left: 60px;
 }
 
 /* .input-top {
@@ -274,13 +329,16 @@ body {
 .chat-history {
   flex: 1;
   padding: 20px;
+  padding-bottom: 120px; /* 留出对话框高度 */
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  height: calc(100vh - 120px);
 }
 
+/* 消息样式 */
 .message {
-  max-width: 70%;
+  max-width: 70%; /* 只限制最大宽度 */
   margin-bottom: 16px;
   padding: 12px 16px;
   border-radius: 8px;
@@ -289,16 +347,19 @@ body {
 
 .message.user {
   background-color: #e3f2fd;
-  align-self: flex-end;
-  margin-left: auto;
+  text-align: left;
   border-bottom-right-radius: 2px;
+  margin-left: auto; /* 用户消息：推到最右边 */
+  margin-right: 0;
 }
 
 .message.assistant {
   background-color: #fff;
-  align-self: flex-start;
+  text-align: left;
   border-bottom-left-radius: 2px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  margin-left: 0; /* AI消息：保持在最左边 */
+  margin-right: auto;
 }
 
 @media (max-width: 768px) {
@@ -315,8 +376,8 @@ body {
   }
   
   .input-area {
-    width: 90%;
-    padding: 12px;
+    left: 20px;
+    width: calc(100% - 40px);
   }
   
   .message {
@@ -346,4 +407,14 @@ body {
     width: 150px;
     text-align: center;
   }
+}
+
+/* 移除原来的选择器 */
+/* .sidebar-hidden + .main-content .input-area { ... } */
+
+/* 使用更通用的选择器 */
+:deep(.sidebar-hidden) ~ .main-content .input-area,
+.sidebar-hidden ~ .main-content .input-area {
+  left: 60px;
+  width: calc(100% - 80px);
 }
