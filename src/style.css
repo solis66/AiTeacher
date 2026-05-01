@@ -39,13 +39,13 @@ body {
 
 .sidebar-header {
   display: flex;
-  align-items: baseline;  /* 改为基线对齐 */
+  align-items: baseline;
   justify-content: space-between;
-  gap: 8px;  /* 添加间距 */
+  gap: 8px;
 }
 
 .sidebar-hidden {
-  width: 24px; /* 只保留按钮宽度 */
+  width: 24px;
   overflow: hidden;
 }
 
@@ -71,13 +71,13 @@ body {
   cursor: pointer;
   font-size: 12px;
   transition: all 0.3s;
-  align-self: center;  /* 在 flex 容器中垂直居中 */
-  margin: 0;  /* 移除默认 margin */
+  align-self: center;
+  margin: 0;
 }
 
 button {
-  margin: 0;  /* 移除按钮的默认 margin */
-  padding: 0;  /* 移除按钮的默认 padding */
+  margin: 0;
+  padding: 0;
 }
 
 .sidebar-toggle-btn:hover {
@@ -88,8 +88,8 @@ button {
   font-size: 20px;
   font-weight: 600;
   color: #1a73e8;
-  margin: 0;  /* 确保没有margin */
-  line-height: 1.5;  /* 设置合理的行高 */
+  margin: 0;
+  line-height: 1.5;
 }
 
 .new-chat-btn {
@@ -185,6 +185,7 @@ button {
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+  position: relative;
 }
 
 .welcome-message {
@@ -194,7 +195,7 @@ button {
   align-items: center;
   justify-content: center;
   padding: 40px;
-  height: calc(100vh - 120px);
+  min-height: 0;
 }
 
 .welcome-icon {
@@ -210,43 +211,12 @@ button {
   margin-bottom: 30px;
 }
 
-/* .mode-buttons {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 40px;
-} */
-
-.mode-btn {
-  padding: 10px 20px;
-  border: 1px solid #e0e0e0;
-  border-radius: 20px;
-  background-color: #fff;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.mode-btn.active {
-  background-color: #1a73e8;
-  color: white;
-  border-color: #1a73e8;
-}
-
-.mode-btn:hover {
-  background-color: #f8f9fa;
-}
-
-.mode-btn.active:hover {
-  background-color: #1557b0;
-}
-
 /* 输入区域样式 */
 .input-area {
-  position: fixed;
+  position: absolute;
   bottom: 20px;
-  left: 260px;
+  left: 20px;
   right: 20px;
-  width: auto;
   background-color: #fff;
   border: 1px solid #e0e0e0;
   border-radius: 12px;
@@ -255,16 +225,9 @@ button {
   z-index: 100;
 }
 
-/* 侧边栏折叠时 */
 .main-container.sidebar-collapsed .input-area {
-  left: 60px;
+  left: 20px;
 }
-
-/* .input-top {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-} */
 
 .input-btn {
   padding: 6px 12px;
@@ -282,7 +245,7 @@ button {
 
 .input-textarea {
   width: 100%;
-  min-height: 60px;
+  min-height: 80px;
   padding: 12px;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
@@ -320,6 +283,11 @@ button {
   background-color: #1557b0;
 }
 
+.send-btn:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
 .send-icon {
   font-size: 16px;
   font-weight: bold;
@@ -329,16 +297,16 @@ button {
 .chat-history {
   flex: 1;
   padding: 20px;
-  padding-bottom: 120px; /* 留出对话框高度 */
+  padding-bottom: 160px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 120px);
+  min-height: 0;
 }
 
 /* 消息样式 */
 .message {
-  max-width: 70%; /* 只限制最大宽度 */
+  max-width: 70%;
   margin-bottom: 16px;
   padding: 12px 16px;
   border-radius: 8px;
@@ -349,7 +317,7 @@ button {
   background-color: #e3f2fd;
   text-align: left;
   border-bottom-right-radius: 2px;
-  margin-left: auto; /* 用户消息：推到最右边 */
+  margin-left: auto;
   margin-right: 0;
 }
 
@@ -358,28 +326,33 @@ button {
   text-align: left;
   border-bottom-left-radius: 2px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-  margin-left: 0; /* AI消息：保持在最左边 */
+  margin-left: 0;
   margin-right: auto;
+}
+
+.message-content {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 @media (max-width: 768px) {
   .sidebar {
     width: 200px;
   }
-  
+
   .system-title {
     font-size: 18px;
   }
-  
+
   .welcome-title {
     font-size: 20px;
   }
-  
+
   .input-area {
     left: 20px;
     width: calc(100% - 40px);
   }
-  
+
   .message {
     max-width: 85%;
   }
@@ -389,32 +362,22 @@ button {
   .sidebar {
     width: 180px;
   }
-  
+
   .history-item {
     font-size: 13px;
   }
-  
+
   .input-area {
     width: 95%;
   }
-  
+
   .mode-buttons {
     flex-direction: column;
     align-items: center;
   }
-  
+
   .mode-btn {
     width: 150px;
     text-align: center;
   }
-}
-
-/* 移除原来的选择器 */
-/* .sidebar-hidden + .main-content .input-area { ... } */
-
-/* 使用更通用的选择器 */
-:deep(.sidebar-hidden) ~ .main-content .input-area,
-.sidebar-hidden ~ .main-content .input-area {
-  left: 60px;
-  width: calc(100% - 80px);
 }
