@@ -50,19 +50,18 @@ body {
 }
 
 .sidebar-hidden .sidebar-header h1,
-.sidebar-hidden .new-chat-btn,
+.sidebar-hidden .sidebar-buttons,
 .sidebar-hidden .history-section,
 .sidebar-hidden .user-info-sidebar {
   display: none;
 }
 
-.sidebar-hidden .sidebar-toggle-btn {
-  display: block;
-  position: static;
-  margin: 0;
+.sidebar-toggle-btn {
+  display: none;
 }
 
-.sidebar-toggle-btn {
+.sidebar:not(.sidebar-hidden) .sidebar-toggle-btn {
+  display: block;
   width: 24px;
   height: 24px;
   border-radius: 4px;
@@ -72,7 +71,6 @@ body {
   font-size: 12px;
   transition: all 0.3s;
   align-self: center;
-  margin: 0;
 }
 
 button {
@@ -186,6 +184,13 @@ button {
   height: 100vh;
   overflow: hidden;
   position: relative;
+  padding-left: 60px;
+  padding-top: 20px;
+}
+
+.main-container.sidebar-collapsed .main-content {
+  padding-left: 20px;
+  padding-top: 70px;
 }
 
 .welcome-message {
@@ -263,11 +268,8 @@ button {
 }
 
 .send-btn {
-  position: absolute;
-  right: 24px;
-  bottom: 24px;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   background-color: #1a73e8;
   color: white;
@@ -277,6 +279,7 @@ button {
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
+  flex-shrink: 0;
 }
 
 .send-btn:hover {
@@ -291,6 +294,180 @@ button {
 .send-icon {
   font-size: 16px;
   font-weight: bold;
+}
+
+/* 快捷键提示 */
+.shortcut-hint {
+  font-size: 12px;
+  color: #999;
+  margin-right: 16px;
+}
+
+/* 文件上传按钮 */
+.upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background-color: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  color: #333;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-left: 12px;
+}
+
+.upload-btn:hover:not(:disabled) {
+  background-color: #e9ecef;
+  border-color: #d0d5dd;
+}
+
+.upload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.upload-icon {
+  font-size: 14px;
+}
+
+.file-input {
+  display: none;
+}
+
+/* 输入区域底部布局 */
+.input-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.input-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.input-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 图片预览 */
+.image-preview {
+  position: relative;
+  max-width: 200px;
+  max-height: 150px;
+  margin-top: 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.remove-image-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.6);
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.remove-image-btn:hover {
+  background-color: rgba(0, 0, 0, 0.8);
+}
+
+/* 消息中的图片预览 */
+.message-image {
+  margin-top: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.preview-img {
+  width: 120px;
+  height: auto;
+  display: block;
+  border-radius: 8px;
+  transition: transform 0.2s;
+}
+
+.preview-img:hover {
+  transform: scale(1.02);
+}
+
+.preview-img[src=""] {
+  display: none;
+}
+
+/* 全屏图片预览 */
+.fullscreen-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  cursor: pointer;
+}
+
+.fullscreen-content {
+  position: relative;
+  max-width: 90%;
+  max-height: 90%;
+  cursor: default;
+}
+
+.fullscreen-img {
+  max-width: 100%;
+  max-height: 85vh;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.fullscreen-close {
+  position: absolute;
+  top: -40px;
+  right: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.fullscreen-close:hover {
+  background-color: rgba(255, 255, 255, 0.3);
 }
 
 /* 对话历史 */
@@ -356,6 +533,15 @@ button {
   .message {
     max-width: 85%;
   }
+
+  .shortcut-hint {
+    display: none;
+  }
+
+  .upload-btn {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
 }
 
 @media (max-width: 480px) {
@@ -371,6 +557,20 @@ button {
     width: 95%;
   }
 
+  .upload-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+    margin-left: 6px;
+  }
+
+  .upload-icon {
+    font-size: 12px;
+  }
+
+  .input-left {
+    gap: 4px;
+  }
+
   .mode-buttons {
     flex-direction: column;
     align-items: center;
@@ -379,5 +579,456 @@ button {
   .mode-btn {
     width: 150px;
     text-align: center;
+  }
+}
+
+/* 登录页面样式 - 低饱和度中性色调 */
+.login-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background-color: #f0f2f5;
+}
+
+.login-form {
+  background-color: #fff;
+  padding: 40px;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  width: 100%;
+  max-width: 400px;
+}
+
+.login-title {
+  font-size: 28px;
+  font-weight: 600;
+  color: #333;
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: #555;
+  margin-bottom: 8px;
+}
+
+.form-group input {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: border-color 0.2s;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.login-btn {
+  width: 100%;
+  padding: 14px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.login-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.login-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error-message {
+  color: #e74c3c;
+  font-size: 13px;
+  text-align: center;
+  margin-top: 15px;
+}
+
+.hint-text {
+  color: #999;
+  font-size: 12px;
+  text-align: center;
+  margin-top: 15px;
+}
+
+/* 同步按钮样式 */
+.sync-btn {
+  width: 100%;
+  padding: 10px;
+  margin-top: 8px;
+  background-color: #fff;
+  border: 1px solid #667eea;
+  border-radius: 8px;
+  color: #667eea;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sync-btn:hover:not(:disabled) {
+  background-color: #f0f0ff;
+}
+
+.sync-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 退出登录按钮 */
+.logout-btn {
+  font-size: 12px;
+  color: #999;
+  background: none;
+  border: none;
+  cursor: pointer;
+  margin-top: 4px;
+  padding: 2px 0;
+}
+
+.logout-btn:hover {
+  color: #e74c3c;
+}
+
+/* 用户信息区域 */
+.user-info-sidebar {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+}
+
+/* 欢迎界面样式 */
+.welcome-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: #f8f9fb;
+}
+
+.welcome-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 40px;
+  background-color: #fff;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.welcome-brand {
+  font-size: 22px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin: 0;
+}
+
+.header-login-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background-color: #fff;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  color: #344054;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.header-login-btn:hover {
+  background-color: #f5f5f5;
+  border-color: #b0b5bd;
+}
+
+.login-icon {
+  font-size: 16px;
+}
+
+.welcome-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.welcome-main {
+  text-align: center;
+  max-width: 600px;
+}
+
+.welcome-icon-large {
+  font-size: 80px;
+  margin-bottom: 30px;
+}
+
+.welcome-heading {
+  font-size: 36px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 16px;
+}
+
+.welcome-desc {
+  font-size: 16px;
+  color: #666;
+  line-height: 1.6;
+  margin-bottom: 40px;
+}
+
+.welcome-features {
+  display: flex;
+  justify-content: center;
+  gap: 40px;
+  margin-bottom: 40px;
+}
+
+.feature-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.feature-icon {
+  font-size: 32px;
+}
+
+.feature-text {
+  font-size: 14px;
+  color: #666;
+  font-weight: 500;
+}
+
+.start-btn {
+  padding: 14px 40px;
+  background-color: #1a1a1a;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.start-btn:hover {
+  background-color: #333;
+}
+
+.back-btn {
+  width: 100%;
+  padding: 12px;
+  margin-top: 16px;
+  background-color: #f5f5f5;
+  color: #666;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.back-btn:hover {
+  background-color: #e8e8e8;
+}
+
+/* 侧边栏按钮区域 */
+.sidebar-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.sidebar-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background-color: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  color: #333;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sidebar-action-btn:hover:not(:disabled) {
+  background-color: #f5f7fa;
+  border-color: #d0d5dd;
+}
+
+.sidebar-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-icon {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+}
+
+.btn-text {
+  flex: 1;
+  text-align: left;
+}
+
+@media (max-width: 768px) {
+  .welcome-header {
+    padding: 16px 20px;
+  }
+
+  .welcome-brand {
+    font-size: 18px;
+  }
+
+  .welcome-heading {
+    font-size: 28px;
+  }
+
+  .welcome-features {
+    gap: 24px;
+  }
+
+  .feature-icon {
+    font-size: 28px;
+  }
+}
+
+@media (max-width: 480px) {
+  .welcome-features {
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .welcome-heading {
+    font-size: 24px;
+  }
+
+  .welcome-desc {
+    font-size: 14px;
+  }
+}
+
+/* 侧边栏隐藏时的工具栏 */
+.collapsed-toolbar {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  z-index: 1000;
+}
+
+.collapsed-btn {
+  width: 36px;
+  height: 36px;
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.collapsed-btn:hover {
+  background-color: #f5f5f5;
+  border-color: #d0d5dd;
+}
+
+.collapsed-action-btn {
+  width: 36px;
+  height: 36px;
+  background-color: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  font-size: 16px;
+  color: #333;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.collapsed-action-btn:hover:not(:disabled) {
+  background-color: #f5f7fa;
+  border-color: #d0d5dd;
+}
+
+.collapsed-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .collapsed-toolbar {
+    top: 15px;
+    left: 15px;
+    gap: 6px;
+  }
+
+  .collapsed-btn,
+  .collapsed-action-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+
+  .main-container.sidebar-collapsed .main-content {
+    padding-left: 15px;
+    padding-top: 65px;
+  }
+}
+
+@media (max-width: 480px) {
+  .collapsed-toolbar {
+    top: 10px;
+    left: 10px;
+    gap: 5px;
+  }
+
+  .collapsed-btn,
+  .collapsed-action-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+
+  .main-container.sidebar-collapsed .main-content {
+    padding-left: 10px;
+    padding-top: 55px;
   }
 }

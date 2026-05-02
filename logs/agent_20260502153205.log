@@ -1,0 +1,7 @@
+2026-05-02 15:34:38,801 - agent - INFO - middleware.py:34 - [log_before_model]即将调用模型，带有1条消息
+2026-05-02 15:34:38,802 - agent - DEBUG - middleware.py:36 - [log_before_model]HumanMessage | 如何写好一篇说明文
+2026-05-02 15:34:40,442 - agent - INFO - middleware.py:18 - [tool monitor]执行工具rag_summarize
+2026-05-02 15:34:40,442 - agent - INFO - middleware.py:19 - [tool monitor]传入参数{'query': '如何写好一篇说明文'}
+2026-05-02 15:34:44,135 - agent - INFO - middleware.py:23 - [tool monitor]工具rag_summarize调用成功
+2026-05-02 15:34:44,137 - agent - INFO - middleware.py:34 - [log_before_model]即将调用模型，带有3条消息
+2026-05-02 15:34:44,137 - agent - DEBUG - middleware.py:36 - [log_before_model]ToolMessage | 写好一篇说明文需紧扣说明对象，抓住其特征，按照合理的顺序（如时间、空间或逻辑顺序）进行说明，语言要准确、简明、通俗，可适当运用举例子、列数字、作比较、打比方等说明方法，确保内容科学、条理清晰、易于理解。

@@ -1,6 +1,61 @@
 <template>
   <div class="app">
-    <div class="main-container" :class="{'sidebar-collapsed': !isSidebarOpen}">
+    <!-- 登录页面 -->
+    <div v-if="!isLoggedIn && showLogin" class="login-container">
+      <div class="login-form">
+        <h2 class="login-title">AI智能批改教师</h2>
+        <div class="form-group">
+          <label>用户名</label>
+          <input type="text" v-model="loginForm.username" placeholder="请输入用户名" />
+        </div>
+        <div class="form-group">
+          <label>密码</label>
+          <input type="password" v-model="loginForm.password" placeholder="请输入密码" @keydown.enter="login" />
+        </div>
+        <button class="login-btn" @click="login" :disabled="isLoading">
+          {{ isLoading ? '登录中...' : '登录' }}
+        </button>
+        <p v-if="loginError" class="error-message">{{ loginError }}</p>
+        <p class="hint-text">用户名: admin | 密码: 123456</p>
+        <button class="back-btn" @click="showLogin = false">返回</button>
+      </div>
+    </div>
+
+    <div v-if="!isLoggedIn && !showLogin" class="welcome-container">
+      <div class="welcome-header">
+        <h1 class="welcome-brand">AI智能批改教师</h1>
+        <button class="header-login-btn" @click="showLogin = true">
+          <span class="login-icon">👤</span>
+          登录
+        </button>
+      </div>
+      <div class="welcome-content">
+        <div class="welcome-main">
+          <div class="welcome-icon-large">🎓</div>
+          <h2 class="welcome-heading">专业的AI作文批改助手</h2>
+          <p class="welcome-desc">基于先进人工智能技术，为初中生提供精准、高效的作文批改服务</p>
+          <div class="welcome-features">
+            <div class="feature-item">
+              <span class="feature-icon">✍️</span>
+              <span class="feature-text">多维度评分</span>
+            </div>
+            <div class="feature-item">
+              <span class="feature-icon">📝</span>
+              <span class="feature-text">详细点评</span>
+            </div>
+            <div class="feature-item">
+              <span class="feature-icon">💡</span>
+              <span class="feature-text">改进建议</span>
+            </div>
+          </div>
+          <button class="start-btn" @click="showLogin = true">
+            开始使用
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-else class="main-container" :class="{'sidebar-collapsed': !isSidebarOpen}">
       <!-- 左侧边栏 -->
       <div class="sidebar" :class="{'sidebar-hidden': !isSidebarOpen}">
 
@@ -13,38 +68,64 @@
           </button>
         </div>
 
-        <!-- 开启新对话按钮 -->
-        <button class="new-chat-btn" @click="newChat">
-          <span class="new-chat-icon">+</span> 新对话
-        </button>
+        <!-- 按钮区域 -->
+        <div class="sidebar-buttons">
+          <!-- 开启新对话按钮 -->
+          <button class="sidebar-action-btn" @click="newChat">
+            <span class="btn-icon">+</span>
+            <span class="btn-text">新对话</span>
+          </button>
+
+          <!-- 同步按钮 -->
+          <button class="sidebar-action-btn" @click="syncHistory" :disabled="isSyncing">
+            <span class="btn-icon">{{ isSyncing ? '⏳' : '🔄' }}</span>
+            <span class="btn-text">{{ isSyncing ? '同步中...' : '同步' }}</span>
+          </button>
+        </div>
 
         <!-- 对话历史列表 -->
         <div class="history-section">
-          <div v-for="(chat, idx) in chatHistory" :key="idx" class="history-group">
-            <div class="history-time">{{ chat.displayDate || formatDate(chat.date) }}</div>
-            <div
-              v-for="(msg, msgIdx) in chat.messages.slice(0, 1)"
-              :key="msgIdx"
-              class="history-item"
-              :class="{'active': currentChatId === chat.id}"
-              @click="loadChat(chat.id)"
-            >
-              {{ msg.content.substring(0, 20) }}{{ msg.content.length > 20 ? '...' : '' }}
+          <template v-for="(group, date) in groupedHistory" :key="date">
+            <div class="history-group">
+              <div class="history-time">{{ date }}</div>
+              <div
+                v-for="chat in group"
+                :key="chat.id"
+                class="history-item"
+                :class="{'active': currentChatId === chat.id}"
+                @click="loadChat(chat.id)"
+              >
+                {{ (chat.messages[0]?.content || '').substring(0, 20) }}{{ (chat.messages[0]?.content || '').length > 20 ? '...' : '' }}
+              </div>
             </div>
-          </div>
+          </template>
         </div>
 
         <!-- 用户信息 -->
         <div class="user-info-sidebar">
-          <div class="avatar">M</div>
+          <div class="avatar">{{ currentUser?.charAt(0).toUpperCase() || 'U' }}</div>
           <div class="user-details">
-            <div class="user-name">MOMO</div>
+            <div class="user-name">{{ currentUser || '用户' }}</div>
+            <button class="logout-btn" @click="logout">退出登录</button>
           </div>
         </div>
       </div>
 
       <!-- 主内容区域 -->
       <div class="main-content">
+        <!-- 侧边栏隐藏时显示的工具栏 -->
+        <div v-if="!isSidebarOpen" class="collapsed-toolbar">
+          <button class="collapsed-btn" @click="toggleSidebar" title="展开侧边栏">
+            ▶
+          </button>
+          <button class="collapsed-action-btn" @click="newChat" title="新对话">
+            <span>+</span>
+          </button>
+          <button class="collapsed-action-btn" @click="syncHistory" :disabled="isSyncing" title="同步">
+            <span>{{ isSyncing ? '⏳' : '🔄' }}</span>
+          </button>
+        </div>
+
         <!-- 欢迎信息 -->
         <div class="welcome-message" v-if="messages.length === 0">
           <div class="welcome-icon">🤖</div>
@@ -57,6 +138,10 @@
             <!-- 普通对话消息 -->
             <div v-if="msg.type !== 'essay_review'" class="message-content">
               {{ msg.content }}
+              <!-- 图片预览 -->
+              <div v-if="msg.imageUrl" class="message-image">
+                <img :src="msg.imageUrl" :alt="'图片'" class="preview-img" @click="previewImageFull(msg.imageUrl)" />
+              </div>
             </div>
 
             <!-- 作文批改结果 -->
@@ -129,14 +214,37 @@
             :placeholder="inputPlaceholder"
             v-model="inputText"
             @input="updateCharCount"
-            @keydown.enter.ctrl="sendMessage"
+            @keydown="handleKeydown"
+            @paste="handlePaste"
             maxlength="5000"
           ></textarea>
           <div class="input-footer">
-            <span class="char-count">{{ charCount }}/5000</span>
-            <button class="send-btn" @click="sendMessage" :disabled="isLoading || !inputText.trim()">
-              <span class="send-icon">↑</span>
-            </button>
+            <div class="input-left">
+              <span class="char-count">{{ charCount }}/5000</span>
+              <!-- 文件上传按钮 -->
+              <label class="upload-btn" :disabled="isLoading">
+                <input type="file" accept=".txt" @change="handleFileUpload" class="file-input" />
+                <span class="upload-icon">📁</span>
+                上传文件
+              </label>
+              <!-- 图片识别按钮 -->
+              <label class="upload-btn image-upload-btn" :disabled="isLoading">
+                <input type="file" accept=".jpg,.png" @change="handleImageUpload" class="file-input" />
+                <span class="upload-icon">🖼️</span>
+                图片识别
+              </label>
+            </div>
+            <div class="input-right">
+              <span class="shortcut-hint">Enter 发送 | Shift+Enter 换行</span>
+              <button class="send-btn" @click="sendMessage" :disabled="isLoading || !canSendMessage()">
+                <span class="send-icon">↑</span>
+              </button>
+            </div>
+          </div>
+          <!-- 图片预览 -->
+          <div v-if="previewImage" class="image-preview">
+            <img :src="previewImage" alt="预览图片" />
+            <button class="remove-image-btn" @click="clearPreviewImage">×</button>
           </div>
         </div>
       </div>
@@ -150,6 +258,14 @@
         <button class="error-close" @click="errorMessage = ''">×</button>
       </div>
     </div>
+
+    <!-- 全屏图片预览模态框 -->
+    <div v-if="fullscreenImage" class="fullscreen-overlay" @click="closeFullscreenImage">
+      <div class="fullscreen-content" @click.stop>
+        <img :src="fullscreenImage" alt="全屏预览" class="fullscreen-img" />
+        <button class="fullscreen-close" @click="closeFullscreenImage">×</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -157,6 +273,19 @@
 import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue';
 import axios from 'axios';
 
+// 认证相关状态
+const isLoggedIn = ref(false);
+const currentUser = ref('');
+const loginForm = ref({ username: '', password: '' });
+const loginError = ref('');
+const isSyncing = ref(false);
+const showLogin = ref(false);
+const previewImage = ref(null);
+const hasImageRecognition = ref(false);
+const lastRecognizedText = ref('');
+const fullscreenImage = ref(null);
+
+// 消息和聊天相关状态
 const messages = ref([]);
 const inputText = ref('');
 const charCount = ref(0);
@@ -171,20 +300,318 @@ const isCreatingChat = ref(false);
 let dateCheckTimer = null;
 let lastCheckedDate = '';
 
+/**
+ * 按日期分组的历史记录
+ * 将chatHistory按displayDate分组，确保每个日期分类只出现一次
+ * @returns {Object} - 以日期为键，聊天记录数组为值的对象
+ */
+const groupedHistory = computed(() => {
+  const groups = {};
+  
+  // 遍历所有聊天记录
+  chatHistory.value.forEach(chat => {
+    // 获取显示日期（优先使用displayDate，否则格式化date字段）
+    const displayDate = chat.displayDate || formatDate(chat.date);
+    
+    // 如果该日期分组不存在，创建新数组
+    if (!groups[displayDate]) {
+      groups[displayDate] = [];
+    }
+    
+    // 将聊天记录添加到对应日期分组
+    groups[displayDate].push(chat);
+  });
+  
+  // 定义日期排序顺序
+  const dateOrder = ['现在', '今天', '昨天'];
+  
+  // 按日期顺序排序
+  const sortedDates = Object.keys(groups).sort((a, b) => {
+    const indexA = dateOrder.indexOf(a);
+    const indexB = dateOrder.indexOf(b);
+    
+    // 如果两个都在dateOrder中，按顺序排列
+    if (indexA !== -1 && indexB !== -1) {
+      return indexA - indexB;
+    }
+    
+    // '现在'、'今天'、'昨天'排在前面
+    if (indexA !== -1) return -1;
+    if (indexB !== -1) return 1;
+    
+    // 其他日期按时间倒序排列（新的在前）
+    return b.localeCompare(a);
+  });
+  
+  // 重新构建有序的分组对象
+  const sortedGroups = {};
+  sortedDates.forEach(date => {
+    sortedGroups[date] = groups[date];
+  });
+  
+  return sortedGroups;
+});
+
 const STORAGE_KEY = 'ai_teacher_chat_history';
-const MAX_HISTORY = 50;
+const TOKEN_KEY = 'ai_teacher_token';
+const MAX_HISTORY = 100;
+const MAX_HISTORY_DAYS = 7;
 
 const essayKeywords = ['作文', '文章', '写作', ' essay', '作文题', '请批改', '请点评', '写一篇', '写了一篇', '字数', '段落', '开头', '结尾', '议论文', '记叙文', '说明文'];
-const consultationKeywords = ['如何', '怎么', '怎样', '为什么', '请问', '我想问', '问一下', '咨询', '方法', '技巧', '策略', '要点', '建议'];
+const consultationKeywords = ['如何', '怎么', '怎样', '为什么', '请问', '我想问', '问一下', '咨询', '方法', '技巧', '策略', '要点', '建议', '告诉我', '分析一下'];
 
+/**
+ * 判断是否为作文提交
+ * @param {string} text - 用户输入的文本
+ * @returns {boolean} - 是否为作文提交
+ */
 const isEssaySubmission = (text) => {
   const hasEssayKeywords = essayKeywords.some(kw => text.includes(kw));
   const hasConsultKeywords = consultationKeywords.some(kw => text.includes(kw));
   const isLongText = text.length > 200;
 
-  if (hasEssayKeywords && !hasConsultKeywords) return true;
-  if (hasConsultKeywords && !hasEssayKeywords) return false;
+  // 如果文本很短（小于30字），即使包含作文关键词也不是作文提交
+  if (text.length < 30) {
+    return false;
+  }
+
+  // 如果包含咨询关键词（尤其是明确的请求词如"告诉我"），优先判定为咨询
+  if (hasConsultKeywords) {
+    return false;
+  }
+
+  // 如果包含作文关键词且文本较长，判定为作文提交
+  if (hasEssayKeywords && isLongText) {
+    return true;
+  }
+
+  // 纯长文本（超过500字）也判定为作文提交
+  if (text.length > 500) {
+    return true;
+  }
+
   return isLongText;
+};
+
+/**
+ * 获取认证令牌
+ * @returns {string} - JWT令牌
+ */
+const getToken = () => {
+  return localStorage.getItem(TOKEN_KEY);
+};
+
+/**
+ * 设置认证令牌
+ * @param {string} token - JWT令牌
+ */
+const setToken = (token) => {
+  localStorage.setItem(TOKEN_KEY, token);
+};
+
+/**
+ * 清除认证令牌
+ */
+const clearToken = () => {
+  localStorage.removeItem(TOKEN_KEY);
+};
+
+/**
+ * 用户登录
+ */
+const login = async () => {
+  if (!loginForm.value.username || !loginForm.value.password) {
+    loginError.value = '请输入用户名和密码';
+    return;
+  }
+
+  isLoading.value = true;
+  loginError.value = '';
+
+  try {
+    const response = await axios.post('/api/login', {
+      username: loginForm.value.username,
+      password: loginForm.value.password
+    });
+
+    if (response.data.success) {
+      setToken(response.data.token);
+      currentUser.value = response.data.username;
+      isLoggedIn.value = true;
+      await loadHistoryFromServer();
+    } else {
+      loginError.value = response.data.error || '登录失败';
+    }
+  } catch (error) {
+    loginError.value = error.response?.data?.error || '登录失败，请检查网络连接';
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+/**
+ * 用户登出
+ */
+const logout = () => {
+  clearToken();
+  isLoggedIn.value = false;
+  currentUser.value = '';
+  chatHistory.value = [];
+  messages.value = [];
+  currentChatId.value = null;
+};
+
+/**
+ * 从服务器加载历史记录
+ */
+const loadHistoryFromServer = async () => {
+  const token = getToken();
+  if (!token) return;
+
+  try {
+    const response = await axios.get('/api/get_history', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (response.data.success) {
+      const serverHistory = response.data.history;
+      const localHistory = loadLocalHistory();
+
+      // 合并历史记录（服务器优先级更高）
+      const mergedHistory = mergeHistory(serverHistory, localHistory);
+      chatHistory.value = mergedHistory
+        .filter(chat => chat.messages && chat.messages.length > 0 && isDateWithinWeek(chat.date))
+        .map(chat => ({
+          ...chat,
+          displayDate: formatDate(chat.date)
+        }));
+
+      // 保存到本地
+      saveLocalHistory(chatHistory.value);
+
+      if (chatHistory.value.length > 0) {
+        const lastChat = chatHistory.value[0];
+        currentChatId.value = lastChat.id;
+        messages.value = [...lastChat.messages];
+      } else {
+        createNewChat(true);
+      }
+    }
+  } catch (error) {
+    console.error('从服务器加载历史记录失败:', error);
+    // 回退到本地存储
+    loadLocalHistoryData();
+  }
+};
+
+/**
+ * 同步历史记录到服务器
+ */
+const syncHistory = async () => {
+  if (!isLoggedIn.value) return;
+
+  isSyncing.value = true;
+
+  try {
+    const token = getToken();
+    if (!token) return;
+
+    const historyToSync = chatHistory.value.map(chat => ({
+      id: chat.id,
+      date: chat.date,
+      messages: chat.messages
+    }));
+
+    const response = await axios.post('/api/save_history', {
+      history: historyToSync
+    }, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (response.data.success) {
+      showError('历史记录同步成功');
+    } else {
+      showError('同步失败');
+    }
+  } catch (error) {
+    showError('同步失败，请检查网络连接');
+  } finally {
+    isSyncing.value = false;
+  }
+};
+
+/**
+ * 合并历史记录
+ * @param {array} serverHistory - 服务器历史记录
+ * @param {array} localHistory - 本地历史记录
+ * @returns {array} - 合并后的历史记录
+ */
+const mergeHistory = (serverHistory, localHistory) => {
+  const merged = {};
+
+  // 先添加本地记录
+  localHistory.forEach(chat => {
+    merged[chat.id] = chat;
+  });
+
+  // 用服务器记录覆盖
+  serverHistory.forEach(chat => {
+    merged[chat.id] = chat;
+  });
+
+  return Object.values(merged).sort((a, b) => {
+    return new Date(b.date) - new Date(a.date);
+  });
+};
+
+/**
+ * 加载本地历史记录
+ */
+const loadLocalHistory = () => {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+/**
+ * 保存本地历史记录
+ * @param {array} history - 历史记录数组
+ */
+const saveLocalHistory = (history) => {
+  try {
+    const dataToSave = history.map(chat => ({
+      id: chat.id,
+      date: chat.date,
+      messages: chat.messages
+    })).filter(chat => isDateWithinWeek(chat.date)).slice(0, MAX_HISTORY);
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
+  } catch (e) {
+    console.error('保存本地历史记录失败:', e);
+  }
+};
+
+/**
+ * 从本地加载历史记录数据（用于未登录状态）
+ */
+const loadLocalHistoryData = () => {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const history = JSON.parse(saved);
+      chatHistory.value = history
+        .filter(chat => chat.messages && chat.messages.length > 0 && isDateWithinWeek(chat.date))
+        .map(chat => ({
+          ...chat,
+          displayDate: formatDate(chat.date)
+        }));
+    }
+  } catch (e) {
+    chatHistory.value = [];
+  }
 };
 
 const getDimensionPercent = (dim) => {
@@ -212,6 +639,24 @@ const generateId = () => {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 };
 
+/**
+ * 检查日期是否在最近一周内
+ * @param {string} dateStr - 日期字符串，格式为 YYYY-MM-DD
+ * @returns {boolean} - 如果日期在一周内返回true，否则返回false
+ */
+const isDateWithinWeek = (dateStr) => {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - MAX_HISTORY_DAYS);
+  
+  return date >= weekAgo;
+};
+
+/**
+ * 获取今天的日期信息
+ * @returns {object} - 包含todayStr, yesterdayStr, todayDateStr
+ */
 const getTodayDate = () => {
   const now = new Date();
   const year = now.getFullYear();
@@ -228,8 +673,13 @@ const getTodayDate = () => {
   return { todayStr, yesterdayStr, todayDateStr };
 };
 
+/**
+ * 格式化日期显示
+ * @param {string} dateStr - 日期字符串，格式为 YYYY-MM-DD
+ * @returns {string} - 格式化后的日期显示（今天、昨天或 YYYY/MM/DD 格式）
+ */
 const formatDate = (dateStr) => {
-  const { todayStr, yesterdayStr, todayDateStr } = getTodayDate();
+  const { todayStr, yesterdayStr } = getTodayDate();
 
   const normalizedDate = normalizeDate(dateStr);
   if (!normalizedDate) {
@@ -243,7 +693,9 @@ const formatDate = (dateStr) => {
     return '昨天';
   }
 
-  return todayDateStr;
+  // 将 YYYY-MM-DD 格式转换为 YYYY/MM/DD 格式显示
+  const [year, month, day] = normalizedDate.split('-');
+  return `${year}/${month}/${day}`;
 };
 
 const parseChineseDate = (chineseDate) => {
@@ -325,26 +777,21 @@ const stopDateCheckTimer = () => {
   }
 };
 
+/**
+ * 加载历史记录
+ * 从localStorage读取历史记录，并过滤掉一周前的记录
+ */
 const loadHistory = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    console.log('[loadHistory] localStorage 数据:', saved);
     if (saved) {
       const history = JSON.parse(saved);
-      console.log('[loadHistory] 解析后的历史记录数量:', history.length);
-      history.forEach((chat, idx) => {
-        console.log(`[loadHistory] 对话${idx}: id=${chat.id}, date=${chat.date}, messagesCount=${chat.messages?.length || 0}`);
-      });
       chatHistory.value = history
-        .filter(chat => chat.messages && chat.messages.length > 0)
+        .filter(chat => chat.messages && chat.messages.length > 0 && isDateWithinWeek(chat.date))
         .map(chat => ({
           ...chat,
           displayDate: formatDate(chat.date)
         }));
-      console.log('[loadHistory] 过滤后的历史记录数量:', chatHistory.value.length);
-      chatHistory.value.forEach((chat, idx) => {
-        console.log(`[loadHistory] 最终对话${idx}: id=${chat.id}, date=${chat.date}, displayDate=${chat.displayDate}`);
-      });
     }
   } catch (e) {
     console.error('加载历史记录失败:', e);
@@ -352,16 +799,27 @@ const loadHistory = () => {
   }
 };
 
+/**
+ * 保存历史记录
+ * 将历史记录保存到localStorage，同时清理超出限制的记录
+ * "现在"分类保存时转换为实际日期
+ */
 const saveHistory = () => {
   try {
-    const dataToSave = chatHistory.value.map(chat => ({
+    let dataToSave = chatHistory.value.map(chat => ({
       id: chat.id,
       date: chat.date,
       messages: chat.messages
     }));
 
+    // 过滤一周前的记录和空消息记录
+    dataToSave = dataToSave.filter(chat => 
+      isDateWithinWeek(chat.date) && chat.messages.length > 0
+    );
+
+    // 限制最大记录数
     if (dataToSave.length > MAX_HISTORY) {
-      dataToSave.splice(0, dataToSave.length - MAX_HISTORY);
+      dataToSave = dataToSave.slice(0, MAX_HISTORY);
     }
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
@@ -370,69 +828,64 @@ const saveHistory = () => {
   }
 };
 
+/**
+ * 创建新对话
+ * 创建"现在"临时分类，用户发送消息后暂存至此分类
+ * @param {boolean} force - 是否强制创建新对话
+ * @returns {string} - 新对话的ID
+ */
 const createNewChat = (force = false) => {
-  console.log('[createNewChat] force:', force);
-
+  // 如果当前没有消息且已有对话，不创建新对话
   if (!force && messages.value.length === 0 && chatHistory.value.length > 0) {
     return currentChatId.value;
-  }
-
-  if (messages.value.length === 0 && chatHistory.value.length > 0) {
-    const existingEmpty = chatHistory.value.find(c => c.id === currentChatId.value);
-    if (existingEmpty) {
-      messages.value = [];
-      return currentChatId.value;
-    }
   }
 
   const id = generateId();
   const { todayStr } = getTodayDate();
 
-  console.log('[createNewChat] 创建新对话, todayStr:', todayStr);
+  // 查找并移除已存在的"现在"分类
+  const existingNowIndex = chatHistory.value.findIndex(c => c.displayDate === '现在');
+  if (existingNowIndex !== -1) {
+    chatHistory.value.splice(existingNowIndex, 1);
+  }
 
-  chatHistory.value.unshift({
+  // 创建"现在"临时对话（用户发送消息后暂存至此）
+  const tempChat = {
     id,
     date: todayStr,
-    displayDate: '今天',
+    displayDate: '现在',
+    isTemp: true,
     messages: []
-  });
+  };
+
+  // 将"现在"分类放在列表顶部
+  chatHistory.value.unshift(tempChat);
 
   currentChatId.value = id;
   messages.value = [];
-  saveHistory();
 
   return id;
 };
 
+/**
+ * 新建对话按钮点击处理
+ * 只有当当前对话有消息时才保存并创建新对话
+ */
 const newChat = () => {
   if (isCreatingChat.value) {
-    console.log('[新对话] 正在创建对话中，跳过');
     return;
   }
 
   isCreatingChat.value = true;
 
   try {
-    console.log('[新对话] 点击新对话按钮', {
-      hasMessages: messages.value.length > 0,
-      currentChatId: currentChatId.value,
-      historyLength: chatHistory.value.length
-    });
-
     if (messages.value.length > 0) {
-      console.log('[新对话] 保存当前对话');
       saveCurrentChat();
-      console.log('[新对话] 创建新对话');
       createNewChat(true);
-    } else {
-      console.log('[新对话] 当前无消息，检查是否需要创建');
-      if (chatHistory.value.length === 0) {
-        console.log('[新对话] 历史为空，创建新对话');
-        createNewChat(true);
-      } else {
-        console.log('[新对话] 已有对话，不创建新对话');
-      }
+    } else if (chatHistory.value.length === 0) {
+      createNewChat(true);
     }
+    // 如果当前无消息且已有对话，不做任何操作
   } finally {
     isCreatingChat.value = false;
   }
@@ -442,6 +895,9 @@ const newChat = () => {
   expandedSections.value = {};
 };
 
+/**
+ * 保存当前对话
+ */
 const saveCurrentChat = () => {
   if (!currentChatId.value || messages.value.length === 0) return;
 
@@ -450,9 +906,18 @@ const saveCurrentChat = () => {
     chatHistory.value[chatIndex].messages = [...messages.value];
     chatHistory.value[chatIndex].displayDate = formatDate(chatHistory.value[chatIndex].date);
     saveHistory();
+
+    // 如果已登录，异步同步到服务器
+    if (isLoggedIn.value) {
+      syncHistory();
+    }
   }
 };
 
+/**
+ * 加载指定对话
+ * @param {string} chatId - 对话ID
+ */
 const loadChat = (chatId) => {
   if (currentChatId.value === chatId) return;
 
@@ -469,30 +934,96 @@ const loadChat = (chatId) => {
   }
 };
 
+/**
+ * 切换侧边栏显示/隐藏状态
+ */
 const toggleSidebar = () => {
   isSidebarOpen.value = !isSidebarOpen.value;
 };
 
+/**
+ * 页面加载时执行
+ */
 onMounted(() => {
-  loadHistory();
-  refreshDisplayDates();
-  startDateCheckTimer();
-
-  if (chatHistory.value.length === 0) {
-    createNewChat(true);
+  // 检查是否有保存的token
+  const token = getToken();
+  if (token) {
+    // 尝试验证token并加载历史记录
+    verifyTokenAndLoad(token);
   } else {
-    const lastChat = chatHistory.value[0];
-    if (lastChat && lastChat.messages.length > 0) {
-      currentChatId.value = lastChat.id;
-      messages.value = [...lastChat.messages];
+    // 未登录状态，加载本地历史记录（如果有）
+    loadLocalHistoryData();
+    startDateCheckTimer();
+
+    if (chatHistory.value.length === 0) {
+      createNewChat(true);
     } else {
-      currentChatId.value = lastChat.id;
-      messages.value = [];
+      const lastChat = chatHistory.value[0];
+      if (lastChat && lastChat.messages.length > 0) {
+        currentChatId.value = lastChat.id;
+        messages.value = [...lastChat.messages];
+      } else {
+        currentChatId.value = lastChat.id;
+        messages.value = [];
+      }
     }
   }
 
   updateCharCount();
 });
+
+/**
+ * 验证token并加载历史记录
+ */
+const verifyTokenAndLoad = async (token) => {
+  try {
+    // 尝试获取用户信息或历史记录来验证token
+    const response = await axios.get('/api/get_history', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (response.data.success) {
+      // token有效，设置登录状态
+      const decoded = parseJwt(token);
+      currentUser.value = decoded.username;
+      isLoggedIn.value = true;
+
+      await loadHistoryFromServer();
+      startDateCheckTimer();
+    } else {
+      // token无效，清除并显示登录页面
+      clearToken();
+    }
+  } catch (error) {
+    // token无效或服务器不可用，清除token
+    clearToken();
+    loadLocalHistoryData();
+    startDateCheckTimer();
+
+    if (chatHistory.value.length === 0) {
+      createNewChat(true);
+    } else {
+      const lastChat = chatHistory.value[0];
+      currentChatId.value = lastChat.id;
+      messages.value = [...lastChat.messages];
+    }
+  }
+};
+
+/**
+ * 解析JWT令牌
+ * @param {string} token - JWT令牌
+ * @returns {object} - 解码后的payload
+ */
+const parseJwt = (token) => {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(base64));
+  } catch (e) {
+    return {};
+  }
+};
 
 onUnmounted(() => {
   stopDateCheckTimer();
@@ -500,6 +1031,219 @@ onUnmounted(() => {
 
 const updateCharCount = () => {
   charCount.value = inputText.value.length;
+};
+
+/**
+ * 处理键盘事件
+ * Enter键发送消息，Shift+Enter换行
+ * @param {KeyboardEvent} event - 键盘事件对象
+ */
+const handleKeydown = (event) => {
+  // Enter键且没有按住Shift
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendMessage();
+  }
+  // Shift+Enter组合键，保持换行行为
+  // 不需要特别处理，textarea默认支持
+};
+
+/**
+ * 处理粘贴事件，支持图片粘贴
+ * @param {ClipboardEvent} event - 粘贴事件对象
+ */
+const handlePaste = (event) => {
+  const items = event.clipboardData?.items;
+  if (!items) return;
+
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      event.preventDefault();
+      const file = item.getAsFile();
+      if (file) {
+        handleImageFile(file);
+      }
+      break;
+    }
+  }
+};
+
+/**
+ * 处理图片上传按钮点击
+ * @param {Event} event - 文件选择事件
+ */
+const handleImageUpload = (event) => {
+  const file = event.target.files[0];
+  if (file) {
+    handleImageFile(file);
+  }
+  event.target.value = '';
+};
+
+/**
+ * 处理图片文件
+ * @param {File} file - 图片文件对象
+ */
+const handleImageFile = async (file) => {
+  // 验证文件类型
+  if (!file.type.startsWith('image/')) {
+    showError('仅支持上传图片文件');
+    return;
+  }
+
+  // 验证文件格式
+  const ext = file.name.toLowerCase().split('.').pop();
+  if (!['jpg', 'jpeg', 'png'].includes(ext)) {
+    showError('仅支持jpg和png格式的图片');
+    return;
+  }
+
+  // 验证文件大小（限制5MB）
+  if (file.size > 5 * 1024 * 1024) {
+    showError('图片大小不能超过5MB');
+    return;
+  }
+
+  try {
+    isLoading.value = true;
+    showError('正在识别图片内容...');
+
+    // 显示预览
+    previewImage.value = URL.createObjectURL(file);
+
+    // 模拟图片识别（实际应用中调用OCR服务）
+    await simulateImageRecognition(file);
+
+    isLoading.value = false;
+  } catch (error) {
+    isLoading.value = false;
+    previewImage.value = null;
+    showError(`图片识别失败: ${error.message}`);
+  }
+};
+
+/**
+ * 模拟图片识别（实际应用中应调用OCR API）
+ * 注意：当前仅保留图片预览功能，不自动填入识别内容
+ * @param {File} file - 图片文件对象
+ */
+const simulateImageRecognition = async (file) => {
+  // 模拟识别过程
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // 标记已上传图片，保持输入框空白由用户自主输入
+  hasImageRecognition.value = true;
+  
+  showError('图片已上传，请输入您的查询或批改请求');
+};
+
+/**
+ * 清除预览图片
+ */
+const clearPreviewImage = () => {
+  if (previewImage.value) {
+    URL.revokeObjectURL(previewImage.value);
+    previewImage.value = null;
+  }
+  hasImageRecognition.value = false;
+  lastRecognizedText.value = '';
+};
+
+/**
+ * 全屏预览图片
+ * @param {string} imageUrl - 图片URL
+ */
+const previewImageFull = (imageUrl) => {
+  fullscreenImage.value = imageUrl;
+};
+
+/**
+ * 关闭全屏预览
+ */
+const closeFullscreenImage = () => {
+  fullscreenImage.value = null;
+};
+
+/**
+ * 检查是否可以发送消息
+ * @returns {boolean} - 是否可以发送
+ */
+const canSendMessage = () => {
+  const text = inputText.value.trim();
+  if (!text) return false;
+  
+  // 有图片时，允许发送任何非空文本
+  if (hasImageRecognition.value) {
+    return text.length > 0;
+  }
+  
+  return true;
+};
+
+/**
+ * 处理文件上传
+ * @param {Event} event - 文件选择事件
+ */
+const handleFileUpload = async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  // 验证文件类型
+  if (!file.name.toLowerCase().endsWith('.txt')) {
+    showError('仅支持上传.txt格式的文本文件');
+    event.target.value = '';
+    return;
+  }
+
+  // 验证文件大小（限制1MB）
+  if (file.size > 1 * 1024 * 1024) {
+    showError('文件大小不能超过1MB');
+    event.target.value = '';
+    return;
+  }
+
+  try {
+    isLoading.value = true;
+    showError('正在解析文件内容...');
+
+    // 读取文件内容
+    const content = await readFileContent(file);
+    
+    // 根据内容类型进行处理
+    inputText.value = content;
+    updateCharCount();
+
+    showError('文件解析成功，内容已填入输入框');
+  } catch (error) {
+    showError(`文件解析失败: ${error.message}`);
+  } finally {
+    isLoading.value = false;
+    event.target.value = '';
+  }
+};
+
+/**
+ * 读取文件内容
+ * @param {File} file - 文件对象
+ * @returns {Promise<string>} - 文件内容
+ */
+const readFileContent = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      const content = e.target.result;
+      // 处理可能的编码问题（如UTF-8 BOM）
+      const cleanedContent = content.replace(/^\uFEFF/, '');
+      resolve(cleanedContent);
+    };
+    
+    reader.onerror = () => {
+      reject(new Error('文件读取失败'));
+    };
+    
+    reader.readAsText(file, 'UTF-8');
+  });
 };
 
 const toggleRawResponse = (index) => {
@@ -542,8 +1286,18 @@ const cleanAIResponse = (response, userMessage) => {
   return cleaned.trim();
 };
 
+/**
+ * 发送消息
+ * 验证输入内容，发送到后端API，并处理AI响应
+ */
 const sendMessage = async () => {
-  if (!inputText.value.trim()) return;
+  // 检查是否可以发送
+  if (!canSendMessage()) {
+    if (hasImageRecognition.value) {
+      showError('图片识别后请输入补充说明或指令');
+    }
+    return;
+  }
 
   isLoading.value = true;
 
@@ -561,6 +1315,9 @@ const sendMessage = async () => {
   const messageToSend = inputText.value;
   inputText.value = '';
   updateCharCount();
+  
+  // 清除图片识别状态
+  clearPreviewImage();
 
   try {
     const response = await axios.post('/api/chat', {
@@ -641,13 +1398,6 @@ const detectEssayType = (text) => {
   }
 
   return '初中作文';
-};
-
-const handleImageUpload = (event) => {
-  const file = event.target.files[0];
-  if (file) {
-    console.log('上传图片:', file.name);
-  }
 };
 
 const handleDocUpload = (event) => {
