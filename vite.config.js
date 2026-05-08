@@ -7,10 +7,34 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/api': {
+      // 代理所有API请求到后端
+      '/chat': {
         target: 'http://localhost:8501',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '')
+        changeOrigin: true
+      },
+      '/login': {
+        target: 'http://localhost:8501',
+        changeOrigin: true
+      },
+      '/get_history': {
+        target: 'http://localhost:8501',
+        changeOrigin: true
+      },
+      '/save_history': {
+        target: 'http://localhost:8501',
+        changeOrigin: true
+      },
+      '/delete_history': {
+        target: 'http://localhost:8501',
+        changeOrigin: true
+      },
+      '/ocr': {
+        target: 'http://localhost:8501',
+        changeOrigin: true
+      },
+      '/health': {
+        target: 'http://localhost:8501',
+        changeOrigin: true
       }
     }
   }

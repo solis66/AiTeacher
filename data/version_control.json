@@ -1,0 +1,84 @@
+{
+  "version": "1.0.0",
+  "release_date": "2024-01-15",
+  "description": "作文评分标准统一版本，所有体裁均采用50分制",
+  "change_history": [
+    {
+      "version": "1.0.0",
+      "date": "2024-01-15",
+      "author": "系统管理员",
+      "status": "approved",
+      "changes": [
+        {
+          "file": "议论文（初中）评分标准.txt",
+          "type": "update",
+          "description": "统一为50分制，调整各维度分值及权重",
+          "details": "立意与中心10分(20%)、论点与论证18分(36%)、结构与层次8分(16%)、语言表达10分(20%)、例证与材料运用4分(8%)"
+        },
+        {
+          "file": "记叙文（初中）评分标准.txt",
+          "type": "update",
+          "description": "确认各维度分值及权重，确保满分之和为50分",
+          "details": "立意与中心10分(20%)、选材与内容15分(30%)、结构与层次8分(16%)、语言表达10分(20%)、细节与表现5分(10%)、书写与规范2分(4%)"
+        },
+        {
+          "file": "说明文（初中）评分标准.txt",
+          "type": "update",
+          "description": "统一为50分制，调整维度名称与代码配置一致",
+          "details": "将'内容与中心'改为'立意与中心'(17分)、'结构与顺序'改为'结构与层次'(17分)、'方法与语言'改为'语言表达'(13分)、新增'方法与技巧'(2分)、'书写与规范'(1分)"
+        },
+        {
+          "file": "utils/essay_constants.py",
+          "type": "update",
+          "description": "更新评分维度配置，与评分标准文件保持一致",
+          "details": "添加validate_dimension_scores、calculate_total_score、get_dimension_weight等校验函数"
+        },
+        {
+          "file": "utils/score_calculator.py",
+          "type": "create",
+          "description": "新建评分计算模块",
+          "details": "实现总分自动汇总、评分校验、分数转换、四舍五入等功能"
+        }
+      ],
+      "reviewer": "技术负责人",
+      "review_date": "2024-01-15",
+      "test_results": "所有单元测试通过(16/16)"
+    }
+  ],
+  "approval_workflow": {
+    "steps": [
+      {
+        "step": 1,
+        "name": "变更申请",
+        "description": "提交评分标准变更申请，包含变更原因、变更内容、影响范围",
+        "responsible": "内容管理员"
+      },
+      {
+        "step": 2,
+        "name": "技术评审",
+        "description": "技术团队评审变更的技术可行性和系统影响",
+        "responsible": "技术负责人"
+      },
+      {
+        "step": 3,
+        "name": "测试验证",
+        "description": "运行单元测试和集成测试，验证变更的正确性",
+        "responsible": "测试工程师"
+      },
+      {
+        "step": 4,
+        "name": "审批发布",
+        "description": "最终审批通过后发布变更",
+        "responsible": "系统管理员"
+      }
+    ]
+  },
+  "validation_rules": {
+    "total_score_must_be_50": true,
+    "dimension_names_must_match_code": true,
+    "weights_must_sum_to_100": true,
+    "all_dimensions_must_have_scores": true,
+    "scores_must_be_non_negative": true,
+    "scores_must_not_exceed_max": true
+  }
+}

@@ -1,0 +1,7 @@
+2026-05-07 14:04:04,691 - agent - INFO - middleware.py:34 - [log_before_model]即将调用模型，带有1条消息
+2026-05-07 14:04:04,692 - agent - DEBUG - middleware.py:36 - [log_before_model]HumanMessage | 在批改上面这篇作文后，请你给我具体的作文改进建议
+2026-05-07 14:04:06,498 - agent - INFO - middleware.py:18 - [tool monitor]执行工具rag_summarize
+2026-05-07 14:04:06,500 - agent - INFO - middleware.py:19 - [tool monitor]传入参数{'query': '作文改进建议通用指南'}
+2026-05-07 14:04:08,562 - agent - INFO - middleware.py:23 - [tool monitor]工具rag_summarize调用成功
+2026-05-07 14:04:08,567 - agent - INFO - middleware.py:34 - [log_before_model]即将调用模型，带有3条消息
+2026-05-07 14:04:08,568 - agent - DEBUG - middleware.py:36 - [log_before_model]ToolMessage | 暂无参考资料，无法基于评分标准提供具体改进建议。
