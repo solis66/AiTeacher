@@ -236,8 +236,8 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 For questions or suggestions, please contact:
 
-- 邮箱 | Email: contact@aiteacher.com
-- GitHub: [yourusername](https://github.com/yourusername)
+- 邮箱 | Email: 2093125624@qq.com
+- GitHub: [solis66](https://github.com/solis66)
 
 ---
 
