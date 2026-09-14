@@ -35,6 +35,11 @@ export default defineConfig({
       '/health': {
         target: 'http://localhost:8501',
         changeOrigin: true
+      },
+      // 批改工作台接口（创建/详情/列表/保存/页面图片/导出/重试/删除）
+      '/api': {
+        target: 'http://localhost:8501',
+        changeOrigin: true
       }
     }
   }

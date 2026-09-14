@@ -1,61 +1,156 @@
 <template>
   <div class="input-area">
-    <!-- 体裁选择区域 -->
-    <div class="input-type-selector">
-      <TypeSelector 
-        v-model="localEssayType" 
-        :disabled="isLoading"
-        @update:model-value="handleTypeChange"
-      />
+    <!-- 第一行：年级选择（体裁已移除，由 AI 依据题干判定） -->
+    <TypeSelector
+      v-model:grade="localGrade"
+      :disabled="isLoading"
+      @update:grade="handleGradeChange"
+    />
+
+    <!-- 第二行：命题信息（选填）。与作文正文区分，两项均可单独留空 -->
+    <div class="meta-row">
+      <label class="meta-field">
+        <span class="meta-label">作文题目</span>
+        <input
+          v-model="localTitle"
+          type="text"
+          class="ui-input"
+          placeholder="选填；仅填题目也可批改"
+          :disabled="isLoading"
+          maxlength="100"
+        />
+      </label>
+      <label class="meta-field">
+        <span class="meta-label">题干要求</span>
+        <input
+          v-model="localRequirements"
+          type="text"
+          class="ui-input"
+          placeholder="选填；题干若限定体裁将严格按该体裁标准批改，否则按通用标准"
+          :disabled="isLoading"
+          maxlength="300"
+        />
+      </label>
     </div>
-    
-    <!-- 输入框 -->
+
+    <!-- 第三行：作文正文 -->
     <textarea
       ref="textareaRef"
       v-model="inputContent"
-      class="input-textarea"
+      class="ui-textarea body-textarea"
       :placeholder="placeholder"
       :disabled="isLoading"
       @keydown="handleKeyDown"
     ></textarea>
-    
-    <!-- 图片预览 -->
-    <div v-if="imagePreview" class="image-preview">
-      <img :src="imagePreview" alt="预览" />
-      <button class="remove-image-btn" @click="removeImage">×</button>
+
+    <!-- 附件预览：展示顺序即提交顺序，支持上移/下移/移除 -->
+    <div v-if="attachments.length" class="attachment-strip">
+      <div
+        v-for="(item, index) in attachments"
+        :key="item.uid"
+        class="attachment-item"
+        :class="{ 'is-first': index === 0 }"
+      >
+        <div class="attachment-thumb">
+          <img v-if="item.kind === 'image'" :src="item.url" :alt="item.name" />
+          <div v-else class="attachment-pdf">
+            <FileText :size="20" />
+            <span>PDF</span>
+          </div>
+        </div>
+        <div class="attachment-meta">
+          <span class="attachment-name" :title="item.name">{{ item.name }}</span>
+          <span class="attachment-size">{{ formatSize(item.size) }}</span>
+        </div>
+        <div class="attachment-actions">
+          <button
+            type="button"
+            class="ui-icon-btn"
+            data-tip="上移"
+            :disabled="index === 0 || isLoading"
+            @click="move(index, -1)"
+          >
+            <ArrowUp :size="14" />
+          </button>
+          <button
+            type="button"
+            class="ui-icon-btn"
+            data-tip="下移"
+            :disabled="index === attachments.length - 1 || isLoading"
+            @click="move(index, 1)"
+          >
+            <ArrowDown :size="14" />
+          </button>
+          <button
+            type="button"
+            class="ui-icon-btn"
+            data-tip="移除"
+            :disabled="isLoading"
+            @click="removeAt(index)"
+          >
+            <X :size="14" />
+          </button>
+        </div>
+        <span v-if="index === 0" class="attachment-order">第1页</span>
+      </div>
     </div>
-    
+
     <!-- 底部操作栏 -->
     <div class="input-footer">
       <div class="input-left">
-        <!-- 文件上传按钮 -->
-        <label class="upload-btn" :disabled="isLoading">
-          <span class="upload-icon">📁</span>
-          <span>上传文件</span>
-          <input 
-            type="file" 
-            class="file-input" 
-            accept="image/*,.txt,.docx"
-            @change="handleFileUpload"
-            :disabled="isLoading"
-          />
-        </label>
-        
-        <!-- 快捷键提示 -->
         <span class="shortcut-hint">Enter 发送 | Shift+Enter 换行</span>
       </div>
-      
+
+      <!-- 需求：「输入栏右侧」放置上传作文图片 / 上传作文 PDF 图标按钮 -->
       <div class="input-right">
-        <!-- 字数统计 -->
+        <!-- 上传作文图片（仅 JPG） -->
+        <button
+          type="button"
+          class="ui-icon-btn"
+          data-tip="上传作文图片（JPG）"
+          :disabled="isLoading"
+          @click="pickImages"
+        >
+          <ImagePlus :size="18" />
+        </button>
+        <input
+          ref="imageInput"
+          type="file"
+          class="file-input"
+          accept=".jpg,image/jpeg"
+          multiple
+          @change="handleImagePick"
+        />
+
+        <!-- 上传作文 PDF -->
+        <button
+          type="button"
+          class="ui-icon-btn"
+          data-tip="上传作文 PDF"
+          :disabled="isLoading"
+          @click="pickPdf"
+        >
+          <FileText :size="18" />
+        </button>
+        <input
+          ref="pdfInput"
+          type="file"
+          class="file-input"
+          accept=".pdf,application/pdf"
+          multiple
+          @change="handlePdfPick"
+        />
+
         <span class="char-count">{{ inputContent.length }}/{{ maxLength }}</span>
-        
-        <!-- 发送按钮 -->
-        <button 
-          class="send-btn" 
-          :disabled="!canSend || isLoading"
+        <button
+          type="button"
+          class="ui-btn ui-btn--primary send-btn"
+          :disabled="!canSend"
           @click="handleSend"
         >
-          <span class="send-icon">{{ isLoading ? '⏳' : '→' }}</span>
+          <Loader2 v-if="isLoading" :size="14" class="spin" />
+          <Send v-else :size="14" />
+          <span>{{ isLoading ? '批改中' : '发送' }}</span>
         </button>
       </div>
     </div>
@@ -64,316 +159,294 @@
 
 <script setup>
 /**
- * 输入区域组件
- * 
- * 负责用户作文输入，提供以下功能：
- * - 文本输入（支持字数统计和限制）
- * - 作文体裁选择
- * - 文件上传（图片、文本、Word文档）
- * - 快捷键支持（Ctrl+Enter发送）
- * - 加载状态管理
- * 
- * 组件设计：
- * - 响应式布局，适配不同屏幕尺寸
- * - 清晰的视觉反馈（禁用状态、加载状态）
- * - 字数统计和限制提示
- * 
- * @props modelValue - 输入内容
- * @props essayType - 当前选中的体裁
- * @props isLoading - 是否正在加载
- * @props maxLength - 最大输入字数
- * @props placeholder - 输入占位符
- * @event update:modelValue - 内容变化时触发
- * @event update:essayType - 体裁变化时触发
- * @event send - 发送消息时触发
- * @event file-upload - 文件上传时触发
+ * 首页输入区域组件
+ *
+ * 本次变更（对应需求「二、首页输入区」）：
+ * 1. 保留年级选择（由 TypeSelector 承载），随作文一起提交；作文体裁选择已移除，
+ *    由 AI 依据题目与题干要求自动判定体裁并打分。
+ * 2. 新增可选的「作文题目」「题干要求」字段，与正文区分；两项都允许留空。
+ * 3. 输入栏右侧依次新增「上传作文图片」「上传作文 PDF」图标按钮。
+ * 4. 图片仅允许 JPG（前后端双重校验，统一提示「请重新输入jpg格式的图片」）；
+ *    PDF 仅接收有效 PDF。
+ * 5. 支持多张图片/多页 PDF，提交前展示附件预览、排列顺序与移除操作。
+ *
+ * @props modelValue 正文内容
+ * @props grade      年级
+ * @props isLoading  是否正在批改
+ * @event send { content, grade, title, requirements, attachments }
+ * @event error 需要展示给用户的提示文案
  */
 
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
+import { ImagePlus, FileText, Send, X, ArrowUp, ArrowDown, Loader2 } from 'lucide-vue-next';
 import TypeSelector from './TypeSelector.vue';
 
-// 定义组件属性
 const props = defineProps({
-  modelValue: {
-    type: String,
-    default: ''
-  },
-  essayType: {
-    type: String,
-    default: ''
-  },
-  isLoading: {
-    type: Boolean,
-    default: false
-  },
-  maxLength: {
-    type: Number,
-    default: 5000
-  },
-  placeholder: {
-    type: String,
-    default: '输入作文内容进行批改...'
-  }
+  modelValue: { type: String, default: '' },
+  grade: { type: String, default: '' },
+  isLoading: { type: Boolean, default: false },
+  maxLength: { type: Number, default: 5000 },
+  placeholder: { type: String, default: '输入作文正文进行批改，或直接上传作文图片 / PDF…' }
 });
 
-// 定义事件
-const emit = defineEmits(['update:modelValue', 'update:essayType', 'send', 'file-upload']);
+const emit = defineEmits(['update:modelValue', 'update:grade', 'send', 'error']);
 
-// 本地状态
+// 单文件大小上限，与后端 MAX_BYTES 保持一致
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+// 一次上传的附件上限：与后端 MAX_PAGES 保持一致。
+// 一次上传的全部图片/PDF 属于同一篇作文（合并为一条批改记录），
+// 上限为 3 张/页，为后续“批量批改”按作文分组扩展预留。
+const MAX_ATTACHMENTS = 3;
+
 const inputContent = ref(props.modelValue);
-const localEssayType = ref(props.essayType);
-const imagePreview = ref(null);
+const localGrade = ref(props.grade);
+const localTitle = ref('');
+const localRequirements = ref('');
+const attachments = ref([]);
+const imageInput = ref(null);
+const pdfInput = ref(null);
 const textareaRef = ref(null);
 
-// 监听外部内容变化
-watch(
-  () => props.modelValue,
-  (newValue) => {
-    inputContent.value = newValue;
-  }
-);
+let uidSeed = 0;
 
-// 监听外部体裁变化
-watch(
-  () => props.essayType,
-  (newValue) => {
-    localEssayType.value = newValue;
-  }
-);
+// 同步外部值（会话切换时回填）
+watch(() => props.modelValue, (v) => { inputContent.value = v; });
+watch(() => props.grade, (v) => { localGrade.value = v; });
 
-/**
- * 是否可以发送
- * 
- * 根据边界判定标准，允许用户输入1个及以上有效字符
- * 但会在后端进行内容相关性检测，过滤无效请求
- * 
- * @returns {boolean} - 是否可以发送消息
- */
+/** 是否可发送：正文或附件至少有一项 */
 const canSend = computed(() => {
-  const content = inputContent.value.trim();
-  // 允许1个及以上有效字符，但有最大长度限制
-  return content.length >= 1 && content.length <= props.maxLength && !props.isLoading;
+  const hasBody = inputContent.value.trim().length >= 1 && inputContent.value.length <= props.maxLength;
+  return (hasBody || attachments.value.length > 0) && !props.isLoading;
 });
 
-/**
- * 处理体裁变化
- * 
- * @param {string} type - 体裁值
- */
-const handleTypeChange = (type) => {
-  localEssayType.value = type;
-  emit('update:essayType', type);
+const handleGradeChange = (grade) => {
+  localGrade.value = grade;
+  emit('update:grade', grade);
+};
+
+const pickImages = () => { if (!props.isLoading) imageInput.value?.click(); };
+const pickPdf = () => { if (!props.isLoading) pdfInput.value?.click(); };
+
+/** 格式化文件大小用于展示 */
+const formatSize = (bytes) => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 };
 
 /**
- * 处理文件上传
- * 
- * @param {Event} event - 文件选择事件
+ * 校验并加入图片附件。
+ * 需求：只允许 JPG，格式不对统一提示「请重新输入jpg格式的图片」。
  */
-const handleFileUpload = (event) => {
-  const file = event.target.files?.[0];
-  if (!file) return;
-  
-  const reader = new FileReader();
-  
-  if (file.type.startsWith('image/')) {
-    reader.onload = (e) => {
-      imagePreview.value = e.target?.result;
-      emit('file-upload', { file, type: 'image', data: e.target?.result });
-    };
-    reader.readAsDataURL(file);
-  } else {
-    reader.onload = (e) => {
-      const content = e.target?.result;
-      if (content && typeof content === 'string') {
-        inputContent.value += content.substring(0, props.maxLength - inputContent.value.length);
-        emit('file-upload', { file, type: 'text', data: content });
-      }
-    };
-    reader.readAsText(file, 'utf-8');
+const handleImagePick = (event) => {
+  const files = Array.from(event.target.files || []);
+  for (const file of files) {
+    if (attachments.value.length >= MAX_ATTACHMENTS) {
+      emit('error', `一次最多上传${MAX_ATTACHMENTS}张图片/PDF（将作为同一篇作文）`);
+      break;
+    }
+    const isJpgName = /\.jpe?g$/i.test(file.name);
+    const isJpgType = file.type === 'image/jpeg' || file.type === '';
+    if (!isJpgName || !isJpgType || file.size > MAX_FILE_BYTES) {
+      // 非 JPG 或超限：统一提示（超限交由后端给出更精确的 20MB 说明）
+      emit('error', file.size > MAX_FILE_BYTES ? '单个文件不能超过20MB' : '请重新输入jpg格式的图片');
+      continue;
+    }
+    attachments.value.push({
+      uid: `att-${++uidSeed}`,
+      file,
+      kind: 'image',
+      name: file.name,
+      size: file.size,
+      url: URL.createObjectURL(file)
+    });
   }
-  
-  // 重置文件输入
   event.target.value = '';
 };
 
-/**
- * 移除图片
- */
-const removeImage = () => {
-  imagePreview.value = null;
+/** 校验并加入 PDF 附件（仅接收有效 PDF） */
+const handlePdfPick = (event) => {
+  const files = Array.from(event.target.files || []);
+  for (const file of files) {
+    if (attachments.value.length >= MAX_ATTACHMENTS) {
+      emit('error', `一次最多上传${MAX_ATTACHMENTS}张图片/PDF（将作为同一篇作文）`);
+      break;
+    }
+    const isPdf = /\.pdf$/i.test(file.name) && (file.type === 'application/pdf' || file.type === '');
+    if (!isPdf) {
+      emit('error', '请上传有效的 PDF 文件');
+      continue;
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      emit('error', '单个文件不能超过20MB');
+      continue;
+    }
+    attachments.value.push({
+      uid: `att-${++uidSeed}`,
+      file,
+      kind: 'pdf',
+      name: file.name,
+      size: file.size,
+      url: ''
+    });
+  }
+  event.target.value = '';
 };
 
-/**
- * 处理键盘事件
- * 
- * 处理流程：
- * 1. 检测Shift+Enter组合键：插入换行符，不发送消息
- * 2. 检测Ctrl+Enter或Cmd+Enter组合键：发送消息
- * 3. 检测单独的Enter键：发送消息（优先于作文体裁判断）
- * 
- * @param {KeyboardEvent} event - 键盘事件
- */
+/** 调整附件顺序（提交顺序即页面顺序） */
+const move = (index, delta) => {
+  const target = index + delta;
+  if (target < 0 || target >= attachments.value.length) return;
+  const list = attachments.value;
+  [list[index], list[target]] = [list[target], list[index]];
+};
+
+/** 移除附件并释放预览地址 */
+const removeAt = (index) => {
+  const [removed] = attachments.value.splice(index, 1);
+  if (removed?.url) URL.revokeObjectURL(removed.url);
+};
+
 const handleKeyDown = (event) => {
-  // Shift+Enter：插入换行符
-  if (event.shiftKey && event.key === 'Enter') {
-    // 允许默认行为（插入换行）
-    return;
-  }
-  
-  // Ctrl+Enter 或 Cmd+Enter：发送消息
-  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-    event.preventDefault();
-    handleSend();
-    return;
-  }
-  
-  // 单独按Enter键：发送消息
-  if (event.key === 'Enter') {
+  if (event.shiftKey && event.key === 'Enter') return;   // 换行
+  if (event.key === 'Enter' && !event.isComposing) {
     event.preventDefault();
     handleSend();
   }
 };
 
-/**
- * 处理发送消息
- * 
- * 功能说明：
- * - 检查是否可以发送（内容不为空、长度在限制范围内、不在加载中）
- * - 发送消息内容和当前选择的作文体裁给父组件
- * - 清空输入框和图片预览
- */
+/** 发送：把年级、题目、题干要求、正文与附件一并交给父组件 */
 const handleSend = () => {
   if (!canSend.value) return;
-  
   emit('send', {
     content: inputContent.value,
-    essayType: localEssayType.value
+    grade: localGrade.value,
+    title: localTitle.value.trim(),
+    requirements: localRequirements.value.trim(),
+    attachments: [...attachments.value]
   });
-  
-  // 清空输入
+  // 清空输入区（附件交由会话消息持有，返回首页仍可见）
   inputContent.value = '';
-  imagePreview.value = null;
+  attachments.value.forEach((item) => item.url && URL.revokeObjectURL(item.url));
+  attachments.value = [];
 };
+
+// 组件销毁时释放所有预览地址，避免内存泄漏
+onBeforeUnmount(() => {
+  attachments.value.forEach((item) => item.url && URL.revokeObjectURL(item.url));
+});
 </script>
 
 <style scoped>
-/**
- * 输入区域容器样式
- * 
- * 设计思路：
- * 1. 使用relative定位替代absolute，使其保持在文档流中
- * 2. 通过margin-top:auto实现底部固定效果
- * 3. 设置z-index确保层级正确
- * 4. 添加margin-top: 10px确保与聊天内容保持安全距离
- * 
- * 响应式设计：
- * - 默认宽度：calc(100% - 40px)，最大900px
- * - 平板(<768px)：宽度自适应，减少内边距
- * - 手机(<480px)：宽度95%，进一步精简
- */
 .input-area {
-  /* 定位方式：使用relative保持在文档流中，避免absolute导致的遮挡问题 */
   position: relative;
-  
-  /* 尺寸设置 */
   width: calc(100% - 40px);
   max-width: 900px;
-  
-  /* 外边距：顶部10px安全距离，左右居中，底部20px */
   margin: 10px auto 20px auto;
-  
-  /* 内边距 */
-  padding: 16px;
-  
-  /* 背景与边框 */
-  background-color: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 12px;
-  
-  /* 阴影效果 */
-  box-shadow: 0 2px 15px rgba(0, 0, 0, 0.1);
-  
-  /* 层级设置：确保在聊天内容之上但不遮挡 */
-  z-index: 10;
-  
-  /* 盒模型 */
-  box-sizing: border-box;
-  
-  /* 防止被压缩 */
+  padding: 12px 14px;
+  background-color: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
   flex-shrink: 0;
 }
 
-/* 体裁选择区域 */
-.input-type-selector {
-  margin-bottom: 12px;
+/* 命题信息：两列并排，窄屏自动换行 */
+.meta-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 10px 0 8px;
 }
 
-/* 输入框样式 */
-.input-textarea {
-  width: 100%;
-  min-height: 80px;
-  max-height: 200px;
-  padding: 12px;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  resize: vertical;
-  font-family: inherit;
-  font-size: 14px;
-  margin-bottom: 10px;
-  box-sizing: border-box;
-  line-height: 1.5;
-}
-
-.input-textarea:focus {
-  outline: none;
-  border-color: #1a73e8;
-  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
-}
-
-.input-textarea:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-  background-color: #f5f5f5;
-}
-
-/* 图片预览区域 */
-.image-preview {
-  position: relative;
-  max-width: 200px;
-  max-height: 150px;
-  margin-bottom: 10px;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.image-preview img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.remove-image-btn {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background-color: rgba(0, 0, 0, 0.6);
-  color: white;
-  border: none;
-  cursor: pointer;
-  font-size: 16px;
+.meta-field {
   display: flex;
   align-items: center;
-  justify-content: center;
-  transition: background-color 0.2s;
+  gap: 8px;
+  min-width: 0;
 }
 
-.remove-image-btn:hover {
-  background-color: rgba(0, 0, 0, 0.8);
+.meta-label {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  color: var(--c-text-secondary);
+}
+
+.body-textarea {
+  min-height: 76px;
+  max-height: 200px;
+  resize: vertical;
+}
+
+/* 附件预览条 */
+.attachment-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.attachment-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--c-bg-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  max-width: 260px;
+}
+
+/* 第一个附件即第 1 页，左侧加主色标记 */
+.attachment-item.is-first { border-left: 3px solid var(--c-primary); }
+
+.attachment-thumb {
+  width: 34px;
+  height: 30px;
+  border-radius: 4px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--c-bg-muted);
+}
+
+.attachment-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.attachment-pdf {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-text-secondary);
+  font-size: 9px;
+  line-height: 1.1;
+}
+
+.attachment-meta { display: flex; flex-direction: column; min-width: 0; }
+.attachment-name {
+  font-size: var(--fs-xs);
+  color: var(--c-text);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-size { font-size: 11px; color: var(--c-text-muted); }
+
+.attachment-actions { display: flex; gap: 0; flex-shrink: 0; }
+.attachment-actions .ui-icon-btn { width: 22px; height: 22px; }
+
+.attachment-order {
+  position: absolute;
+  top: -8px;
+  right: -6px;
+  padding: 0 5px;
+  font-size: 10px;
+  color: #fff;
+  background: var(--c-primary);
+  border-radius: var(--r-pill);
 }
 
 /* 底部操作栏 */
@@ -383,252 +456,25 @@ const handleSend = () => {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
+  margin-top: 10px;
 }
 
-.input-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.input-left { display: flex; align-items: center; gap: 4px; }
+.input-right { display: flex; align-items: center; gap: 10px; }
 
-.input-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
+.file-input { display: none; }
 
-/* 文件上传按钮 */
-.upload-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  background-color: #f8f9fa;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  color: #333;
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
-  margin-left: 0;
-}
+.shortcut-hint { font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; margin-left: 4px; }
+.char-count { font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; }
 
-.upload-btn:hover:not(:disabled) {
-  background-color: #e9ecef;
-  border-color: #d0d5dd;
-}
+.send-btn { height: 30px; }
 
-.upload-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
-.upload-icon {
-  font-size: 14px;
-}
-
-.file-input {
-  display: none;
-}
-
-/* 快捷键提示 */
-.shortcut-hint {
-  font-size: 12px;
-  color: #999;
-  white-space: nowrap;
-}
-
-/* 字数统计 */
-.char-count {
-  font-size: 12px;
-  color: #999;
-  white-space: nowrap;
-}
-
-/* 发送按钮 */
-.send-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background-color: #1a73e8;
-  color: white;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s;
-  flex-shrink: 0;
-}
-
-.send-btn:hover:not(:disabled) {
-  background-color: #1557b0;
-}
-
-.send-btn:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-
-.send-icon {
-  font-size: 16px;
-  font-weight: bold;
-}
-
-/**
- * 响应式设计 - 平板设备 (768px以下)
- * 
- * 调整策略：
- * 1. 保持宽度自适应
- * 2. 隐藏快捷键提示节省空间
- * 3. 调整按钮尺寸
- */
 @media (max-width: 768px) {
-  .input-area {
-    width: calc(100% - 32px);
-    padding: 12px;
-    margin: 8px auto 16px auto;
-  }
-  
-  .input-textarea {
-    min-height: 70px;
-    font-size: 16px; /* 防止iOS缩放 */
-  }
-  
-  .shortcut-hint {
-    display: none;
-  }
-  
-  .upload-btn {
-    padding: 6px 12px;
-    font-size: 12px;
-  }
-}
-
-/**
- * 响应式设计 - 手机设备 (480px以下)
- * 
- * 调整策略：
- * 1. 更宽的宽度比例(95%)
- * 2. 更小的内边距
- * 3. 更紧凑的按钮
- */
-@media (max-width: 480px) {
-  .input-area {
-    width: 95%;
-    padding: 10px;
-    margin: 6px auto 12px auto;
-    border-radius: 10px;
-  }
-  
-  .input-textarea {
-    min-height: 60px;
-    padding: 10px;
-    font-size: 16px;
-  }
-  
-  .upload-btn {
-    padding: 4px 8px;
-    font-size: 11px;
-    margin-left: 0;
-  }
-  
-  .upload-icon {
-    font-size: 12px;
-  }
-  
-  .input-left {
-    gap: 4px;
-  }
-  
-  .input-footer {
-    gap: 6px;
-  }
-}
-
-/**
- * 响应式设计 - 小屏手机 (320px以下)
- * 
- * 调整策略：
- * 1. 全宽显示
- * 2. 最小化内边距
- */
-@media (max-width: 320px) {
-  .input-area {
-    width: 98%;
-    padding: 8px;
-    margin: 4px auto 8px auto;
-  }
-  
-  .input-textarea {
-    min-height: 50px;
-    padding: 8px;
-  }
-  
-  .upload-btn span:last-child {
-    display: none; /* 隐藏"上传文件"文字，只显示图标 */
-  }
-}
-
-/**
- * 响应式设计 - 大屏桌面 (1440px以上)
- * 
- * 调整策略：
- * 1. 增加最大宽度限制
- * 2. 增加内边距提升视觉舒适度
- */
-@media (min-width: 1440px) {
-  .input-area {
-    max-width: 1000px;
-    padding: 20px;
-  }
-  
-  .input-textarea {
-    min-height: 100px;
-  }
-}
-
-/**
- * 响应式设计 - 超大屏 (1920px以上)
- * 
- * 调整策略：
- * 1. 进一步增加最大宽度
- * 2. 增加字体大小提升可读性
- */
-@media (min-width: 1920px) {
-  .input-area {
-    max-width: 1200px;
-  }
-  
-  .input-textarea {
-    font-size: 15px;
-  }
-}
-
-/**
- * 浏览器兼容性处理
- * 
- * 1. Safari 14+ 支持所有使用的CSS属性
- * 2. Chrome 90+、Firefox 88+、Edge 90+ 完全支持
- * 3. 使用标准的CSS属性，无需额外前缀
- */
-
-/* 确保在旧版浏览器中flex布局正常 */
-@supports not (display: flex) {
-  .input-footer {
-    display: block;
-  }
-  
-  .input-left,
-  .input-right {
-    display: inline-block;
-  }
-}
-
-/* 打印样式优化 */
-@media print {
-  .input-area {
-    display: none;
-  }
+  .input-area { width: calc(100% - 24px); padding: 10px; }
+  .meta-row { grid-template-columns: 1fr; gap: 8px; }
+  .shortcut-hint { display: none; }
 }
 </style>

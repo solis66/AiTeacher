@@ -19,6 +19,12 @@ AI智能批改系统 - API服务模块
 - 运行时健康检查接口
 """
 
+from utils.win_env import load as _load_win_env
+
+# 必须在导入模型工厂之前执行：受限宿主（IDE 终端/服务/沙箱）不会继承系统级
+# 环境变量，这里从注册表补齐 DASHSCOPE / 阿里云 OCR 凭据，避免误报“未配置”。
+_load_win_env()
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from agent.tools.react_agent import ReactAgent
@@ -33,8 +39,11 @@ from utils.score_calculator import (
 from utils.security_config import get_dashscope_api_key, SecurityConfig
 from model.factory import chat_model, is_model_initialized
 from utils.error_handler import ServiceUnavailableError
+from utils.standard_loader import load_unified_standard
 from utils.text_classifier import classify_text, is_essay_submission as classifier_is_essay, detect_essay_type as classifier_detect_type
 from services.consultation_service import answer_consultation
+# 批改工作台路由（上传/分页识别/AI批改/保存/导出）
+from routes.review import review_bp
 import traceback
 import re
 import os
@@ -49,6 +58,9 @@ from functools import wraps
 app = Flask(__name__)
 CORS(app)
 app.config['SECRET_KEY'] = 'ai_teacher_secret_key_2026_must_be_at_least_32_bytes'
+
+# 注册批改工作台蓝图（提供 /api/review* 系列接口）
+app.register_blueprint(review_bp)
 
 def validate_system_config():
     """
@@ -315,27 +327,20 @@ def token_required(f):
 def load_essay_criteria():
     """
     加载各类型作文的评分标准
-    从data目录读取议论文、记叙文、说明文的评分标准文件
+    从data目录读取《广东省中考作文评分标准.doc》作为所有体裁的统一评分依据
+    （自 2026-09 起不再使用各体裁独立的 TXT 评分标准文件）
     
     返回：
-        dict - 各类型作文评分标准字典
+        dict - 各类型作文评分标准字典（同一份统一标准）
     """
-    criteria = {
-        '议论文': '',
-        '记叙文': '',
-        '说明文': ''
-    }
+    criteria = {'议论文': '', '记叙文': '', '说明文': ''}
 
-    data_dir = os.path.join(os.path.dirname(__file__), 'data')
-
-    for essay_type in criteria.keys():
-        file_path = os.path.join(data_dir, f'{essay_type}（初中）评分标准.txt')
-        try:
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    criteria[essay_type] = f.read()
-        except Exception as e:
-            print(f"加载{essay_type}评分标准失败: {e}")
+    try:
+        unified = load_unified_standard()
+        for essay_type in criteria.keys():
+            criteria[essay_type] = unified
+    except Exception as e:
+        print(f"加载统一评分标准失败: {e}")
 
     return criteria
 

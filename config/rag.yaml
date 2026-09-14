@@ -1,2 +1,22 @@
-chat_model_name: qwen3-max
-embedding_model_name: text-embedding-v4
+# RAG / 模型配置（非敏感项；API 密钥一律走环境变量，不写入本文件）
+#
+# 说明：本机 dashscope 原生 SDK(1.25.13) 对较新模型名会误报 "url error"，
+#      因此统一改走阿里云百炼的 OpenAI 兼容模式端点。
+#      模型名需与该端点 /models 返回的 id 完全一致（qwen3.8-max-0902 已实测可用）。
+chat_model_name: qwen3.8-max-0902
+embedding_model_name: qwen3.7-text-embedding
+base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+# 思考模式开关（百炼兼容模式的 enable_thinking 参数）
+#
+# 必须保持 false：qwen3.8-max-0902 默认开启思考模式，token 会先流进 reasoning
+# 通道，content 长时间为空。实测同一篇作文的批改请求：
+#   enable_thinking: true  → >180s 无正文输出，3 次重试后超时失败（用户干等约 9 分钟）
+#   enable_thinking: false → 约 36s 返回完整结构化 JSON
+# 批改场景需要的是稳定的结构化输出，不需要展示推理过程，故关闭。
+enable_thinking: false
+
+# 单次模型调用超时（秒）与重试次数：思考模式关闭后正常耗时 30~60s，
+# 单篇长作文留足余量；重试 1 次即可覆盖偶发网络抖动，避免长时间等待。
+chat_timeout: 300
+chat_max_retries: 1

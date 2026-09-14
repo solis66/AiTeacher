@@ -19,6 +19,9 @@ from langchain_core.prompts import PromptTemplate
 from model.factory import chat_model, get_chat_model, is_model_initialized
 from langchain_core.documents import Document
 from utils.error_handler import ServiceUnavailableError
+from utils.essay_constants import DIMENSION_MAX_SCORES, UNIFIED_MAX_SCORES
+from utils.standard_loader import STANDARD_NAME, load_unified_standard
+import json
 import os
 
 
@@ -181,88 +184,22 @@ def detect_essay_type(text):
 def load_criteria_by_type(essay_type):
     """
     根据作文类型加载相应的评分标准
-    
+
     参数：
-        essay_type: string - 作文类型（议论文/记叙文/说明文）
-        
+        essay_type: string - 作文类型（议论文/记叙文/说明文，保留参数以兼容调用方）
+
     返回：
-        string - 评分标准内容，如果文件不存在则返回空字符串
-        
-    文件路径：
-        data/{essay_type}（初中）评分标准.txt
+        string - 评分标准内容
+
+    说明（自 2026-09 起）：
+        所有作文体裁统一以《广东省中考作文评分标准.doc》为默认评分依据，
+        不再使用各体裁独立的 TXT 评分标准文件。
     """
-    # 构建评分标准文件路径
-    data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-    file_path = os.path.join(data_dir, f'{essay_type}（初中）评分标准.txt')
-    
-    # 如果文件存在，读取并返回内容
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                return f.read()
-        except Exception as e:
-            print(f"[评分标准加载] 读取文件失败: {str(e)}")
-            return ""
-    else:
-        # 文件不存在，返回空字符串
+    try:
+        return load_unified_standard()
+    except Exception as e:
+        print(f"[评分标准加载] 读取失败: {str(e)}")
         return ""
-
-
-def extract_dimensions_from_criteria(criteria_text):
-    """
-    从评分标准文本中提取评分维度信息
-    
-    参数：
-        criteria_text: string - 评分标准文本内容
-        
-    返回：
-        string - 维度JSON Schema字符串，用于提示词模板
-        
-    支持的评分标准格式：
-        1. 记叙文格式："一、立意与中心（10分，权重20%）"
-        2. 议论文格式："- 立意与中心：10分  (权重20%)"
-        3. 说明文格式：类似上述两种格式
-        
-    提取逻辑：
-        1. 首先尝试匹配带中文数字序号的格式（如"一、"）
-        2. 如果第一种格式没有匹配结果，尝试匹配带短横线的格式（如"- "）
-        3. 如果都没有匹配，返回默认维度值
-    """
-    if not criteria_text:
-        print("[维度提取] 评分标准为空，返回默认维度")
-        return '{"维度1": "分值", "维度2": "分值", "维度3": "分值", "维度4": "分值", "维度5": "分值", "维度6": "分值"}'
-    
-    import re
-    
-    # 定义多种评分维度格式的正则表达式模式
-    # 模式1：匹配中文数字序号格式（如"一、立意与中心（10分，权重20%）"）
-    pattern1 = r'[一二三四五六七八九十]+、(.+?)（(\d+)分'
-    # 模式2：匹配短横线格式（如"- 立意与中心：10分  (权重20%)"）
-    pattern2 = r'-\s*([^：:]+?)[：:]\s*(\d+)分'
-    
-    # 尝试第一种模式（中文数字序号格式）
-    matches = re.findall(pattern1, criteria_text)
-    
-    if not matches:
-        # 如果第一种模式没有匹配，尝试第二种模式（短横线格式）
-        print("[维度提取] 模式1未匹配，尝试模式2")
-        matches = re.findall(pattern2, criteria_text)
-    
-    if matches:
-        dimensions = {}
-        for match in matches:
-            dimension_name = match[0].strip()
-            dimension_score = match[1].strip()
-            dimensions[dimension_name] = f"{dimension_score}分"
-        
-        import json
-        result = json.dumps(dimensions, ensure_ascii=False)
-        print(f"[维度提取] 成功提取 {len(dimensions)} 个维度: {result}")
-        return result
-    else:
-        # 如果无法提取维度，返回默认值
-        print("[维度提取] 未找到匹配的评分维度格式，返回默认维度")
-        return '{"维度1": "分值", "维度2": "分值", "维度3": "分值", "维度4": "分值", "维度5": "分值", "维度6": "分值"}'
 
 
 class RagSummarizeService(object):
@@ -490,6 +427,7 @@ class RagSummarizeService(object):
             
             # 添加评分标准到上下文（优先使用）
             if criteria:
+                # 统一评分标准（所有体裁共用）作为辅助参考依据
                 scoring_criteria = criteria
             elif context_docs:
                 # 如果没有评分标准文件，使用检索到的参考资料
@@ -501,9 +439,9 @@ class RagSummarizeService(object):
                 # 如果没有任何参考资料，使用默认提示
                 scoring_criteria = "暂无参考资料，请根据专业知识进行批改。"
 
-            # 步骤5：从评分标准中提取维度信息
-            dimension_json_schema = extract_dimensions_from_criteria(criteria)
-            print(f"[RAG服务] 提取的评分维度: {dimension_json_schema}")
+            # 步骤5：构建维度 JSON schema（统一维度配置，所有体裁共用）
+            dimension_json_schema = json.dumps(UNIFIED_MAX_SCORES, ensure_ascii=False)
+            print(f"[RAG服务] 使用的评分维度: {dimension_json_schema}")
 
             # 步骤6：调用AI模型生成批改结果
             # 传入参数：essay_content, essay_type, scoring_criteria, dimension_json_schema

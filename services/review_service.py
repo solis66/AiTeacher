@@ -31,6 +31,7 @@ from utils.essay_constants import (
     TYPE_FEATURES, SUPPORTED_TYPES, DIMENSION_MAP, DIMENSION_MAX_SCORES,
     TOTAL_SCORE, get_dimensions, get_dimension_max_score
 )
+from utils.standard_loader import STANDARD_NAME, load_unified_standard
 import logging
 
 # 配置日志
@@ -217,44 +218,47 @@ class EssayReviewService:
     def _build_criteria_prompt(self, essay_type: str) -> str:
         """
         动态构建评分标准提示词
-        
+
         参数：
             essay_type: 作文体裁
-            
+
         返回：
             str: 评分标准描述
-            
-        设计说明：
-        - 使用常量配置DIMENSION_MAP和DIMENSION_MAX_SCORES动态生成
-        - 确保评分标准与配置严格一致
-        - 维度顺序与配置保持一致
+
+        设计说明（自 2026-09 起）：
+        - 所有体裁统一以《广东省中考作文评分标准.doc》为默认评分依据（辅助参考）
+        - 主依据为题目与题干要求（见提示词模板中的优先级规则）
+        - 维度与满分使用统一配置 DIMENSION_MAX_SCORES
         """
-        # 获取当前体裁的维度列表和满分配置
-        dimensions = get_dimensions(essay_type)
-        max_scores = DIMENSION_MAX_SCORES.get(essay_type, {})
-        
+        # 统一评分标准全文（辅助参考依据）
+        try:
+            standard_text = load_unified_standard()
+        except Exception as e:
+            logger.error(f"加载统一评分标准失败: {str(e)}")
+            standard_text = ''
+
         # 维度评分标准描述模板
         dimension_descriptions = {
-            '立意与中心': '中心突出、立意新颖、思想深刻',
-            '论点与论证': '论点明确、深刻；论证充分、逻辑严密',
-            '选材与内容': '选材新颖、内容充实、感情真挚',
-            '结构与层次': '结构完整、层次清晰、过渡自然',
-            '语言表达': '语言流畅、准确生动、用词恰当',
-            '例证与材料运用': '例证恰当、材料丰富、运用合理',
-            '细节与表现': '细节描写生动、表现力强',
-            '方法与技巧': '说明方法恰当、技巧运用熟练',
-            '书写与规范': '书写工整、格式规范'
+            '立意与中心': '切合题意、立意明确、中心突出',
+            '内容与选材': '内容具体充实、材料生动、有真情实感',
+            '结构与层次': '结构完整、条理清楚、详略得当',
+            '语言表达': '语言通顺、得体、流畅',
+            '书写与规范': '书写规范整洁、标点正确'
         }
-        
-        # 构建评分标准字符串
+
+        # 构建评分标准字符串：统一标准全文（辅）+ 统一维度分值（辅）
         criteria_lines = []
-        criteria_lines.append(f"【{essay_type}评分标准（满分{TOTAL_SCORE}分）】")
-        
+        criteria_lines.append(f"【统一评分标准（满分{TOTAL_SCORE}分）——{STANDARD_NAME}】")
+        criteria_lines.append(standard_text)
+        criteria_lines.append("")
+        criteria_lines.append("【统一评分维度及分值（所有体裁共用）】")
+        dimensions = get_dimensions(essay_type)
+        max_scores = DIMENSION_MAX_SCORES.get(essay_type, {})
         for i, dim_name in enumerate(dimensions, 1):
             max_score = max_scores.get(dim_name, 10)
             description = dimension_descriptions.get(dim_name, '评分维度')
             criteria_lines.append(f"{i}. {dim_name}（{max_score}分）：{description}")
-        
+
         return '\n'.join(criteria_lines)
     
     def _build_dimension_json_schema(self, essay_type: str) -> str:

@@ -1,236 +1,90 @@
 <template>
   <div class="type-selector">
-    <div class="type-selector-label">作文体裁</div>
-    <div class="type-options">
-      <button
-        v-for="option in essayTypeOptions"
-        :key="option.value"
-        class="type-option"
-        :class="{
-          'selected': modelValue === option.value,
-          'disabled': disabled
-        }"
-        @click="selectType(option.value)"
-        :title="option.description"
-      >
-        <span class="type-icon">{{ option.icon }}</span>
-        <span class="type-name">{{ option.label }}</span>
-      </button>
-    </div>
-    <div v-if="!modelValue && showHint" class="type-hint">
-      ⚠️ 请选择体裁
+    <!-- 年级：只保留年级选择，体裁由 AI 依据题干要求判定 -->
+    <div class="selector-group">
+      <span class="selector-label">年级</span>
+      <div class="selector-options">
+        <button
+          v-for="option in gradeOptions"
+          :key="option"
+          type="button"
+          class="ui-chip"
+          :class="{ 'is-selected': grade === option }"
+          :disabled="disabled"
+          :title="`按${option}的评分要求批改`"
+          @click="selectGrade(option)"
+        >
+          {{ option }}
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
 /**
- * 作文体裁选择组件
- * 
- * 提供三种作文体裁选项：议论文、记叙文、说明文
- * 用户可以选择其中一种作为作文批改的依据
- * 
- * 组件设计：
- * - 使用互斥选择模式，只能选择一种体裁
- * - 提供清晰的视觉反馈，选中状态有明显标识
- * - 支持禁用状态，在加载或提交时禁用选择
- * 
- * @props modelValue - 当前选中的体裁值
- * @props disabled - 是否禁用选择
- * @props showHint - 是否显示未选择提示
- * @event update:modelValue - 体裁选择变化时触发
+ * 年级选择组件
+ *
+ * 变更说明：
+ * - 原「作文体裁 + 年级」中的体裁选择已移除：作文体裁不再由用户手动指定，
+ *   改由 AI 依据作文题目与题干要求自动判定（题干明确限定体裁时严格按该体裁打分，
+ *   未限定时按默认通用标准打分）。
+ * - 年级保留，只影响批改时的评分尺度（由后端写入提示词），不改变评分维度。
+ * - 复用公共样式 .ui-chip，与批改页保持一致。
+ *
+ * @props grade      当前年级
+ * @props disabled   是否禁用
+ * @event update:grade
  */
 
 import { ref } from 'vue';
 
-// 定义组件属性
 const props = defineProps({
-  modelValue: {
-    type: String,
-    default: ''
-  },
-  disabled: {
-    type: Boolean,
-    default: false
-  },
-  showHint: {
-    type: Boolean,
-    default: true
-  }
+  grade: { type: String, default: '' },
+  disabled: { type: Boolean, default: false }
 });
 
-// 定义事件
-const emit = defineEmits(['update:modelValue']);
+const emit = defineEmits(['update:grade']);
 
-// 作文体裁选项配置
-const essayTypeOptions = ref([
-  {
-    value: '议论文',
-    label: '议论文',
-    icon: '💬',
-    description: '以议论为主，表达观点和论证'
-  },
-  {
-    value: '记叙文',
-    label: '记叙文',
-    icon: '📖',
-    description: '以叙述为主，讲述故事和经历'
-  },
-  {
-    value: '说明文',
-    label: '说明文',
-    icon: '📝',
-    description: '以说明为主，解释事物和原理'
-  }
-]);
+// 年级选项（与后端 review_workbench.GRADES 保持一致）
+const gradeOptions = ref(['七年级', '八年级', '九年级']);
 
-/**
- * 选择体裁
- * 
- * @param {string} type - 体裁值
- */
-const selectType = (type) => {
+/** 选择年级：再次点击已选项可取消 */
+const selectGrade = (grade) => {
   if (props.disabled) return;
-  
-  // 如果点击已选中的选项，取消选择
-  if (props.modelValue === type) {
-    emit('update:modelValue', '');
-  } else {
-    emit('update:modelValue', type);
-  }
+  emit('update:grade', props.grade === grade ? '' : grade);
 };
 </script>
 
 <style scoped>
 .type-selector {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
 }
 
-.type-selector-label {
-  font-size: 12px;
-  color: #666;
-  font-weight: 500;
-}
-
-.type-options {
+.selector-group {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+.selector-label {
+  font-size: var(--fs-xs);
+  color: var(--c-text-secondary);
+  white-space: nowrap;
+}
+
+.selector-options {
+  display: flex;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
-.type-option {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  background-color: #f8f9fa;
-  border: 1px solid #e0e0e0;
-  border-radius: 20px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  font-size: 13px;
-  color: #333;
+/* 窄屏：标签换行后保持紧凑 */
+@media (max-width: 600px) {
+  .selector-group { gap: 6px; }
+  .selector-options { gap: 4px; }
 }
-
-.type-option:hover:not(.disabled):not(.selected) {
-  background-color: #e9ecef;
-  border-color: #d0d5dd;
-}
-
-.type-option.selected {
-  background-color: #1a73e8;
-  border-color: #1a73e8;
-  color: white;
-}
-
-.type-option.disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.type-icon {
-  font-size: 14px;
-}
-
-.type-name {
-  font-weight: 500;
-}
-
-.type-hint {
-  font-size: 12px;
-  color: #f59e0b;
-  padding: 4px 8px;
-  background-color: #fffbeb;
-  border-radius: 4px;
-  display: inline-block;
-  width: fit-content;
-}
-
-/**
- * 响应式设计 - 平板设备 (768px以下)
- */
-@media (max-width: 768px) {
-  .type-option {
-    padding: 6px 12px;
-    font-size: 12px;
-  }
-  
-  .type-icon {
-    font-size: 12px;
-  }
-}
-
-/**
- * 响应式设计 - 手机设备 (480px以下)
- */
-@media (max-width: 480px) {
-  .type-selector-label {
-    font-size: 11px;
-  }
-  
-  .type-options {
-    gap: 6px;
-  }
-  
-  .type-option {
-    padding: 5px 10px;
-    font-size: 11px;
-    gap: 4px;
-    border-radius: 16px;
-  }
-  
-  .type-icon {
-    font-size: 11px;
-  }
-  
-  .type-hint {
-    font-size: 11px;
-    padding: 3px 6px;
-  }
-}
-
-/**
- * 响应式设计 - 小屏手机 (320px以下)
- */
-@media (max-width: 320px) {
-  .type-option {
-    padding: 4px 8px;
-    font-size: 10px;
-  }
-  
-  .type-icon {
-    font-size: 10px;
-  }
-  
-  .type-name {
-    font-weight: 400;
-  }
-}
-
-/**
- * 浏览器兼容性处理
- * 所有CSS属性在Chrome 90+、Firefox 88+、Safari 14+、Edge 90+中均支持
- */
 </style>

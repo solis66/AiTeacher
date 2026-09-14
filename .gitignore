@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node / 前端构建产物
+node_modules/
+dist/
+
+# 日志
+logs/
+
+# 环境实时数据（含用户隐私，不入库）
+history/
+chroma_db/
+md5.text
+
+# IDE
+.idea/
+
+# 系统文件
+.DS_Store
+Thumbs.db

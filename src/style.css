@@ -4,12 +4,70 @@
   box-sizing: border-box;
 }
 
+/*
+ * ============================================================================
+ * 公共设计令牌（首页 AI 对话界面 与 作文批改工作台 共用）
+ * ----------------------------------------------------------------------------
+ * 设计约束（对应需求「整体设计」）：
+ *  - 白色背景 + 浅灰分隔线 + 克制的主色强调，不使用大面积渐变
+ *  - 批注用的红/绿仅用于纠错与标记，不作为装饰色
+ *  - 圆角统一 6–8px；阴影极轻
+ *  - 字号层级固定，首页与批改页共用，保证两页观感一致
+ * ============================================================================
+ */
+:root {
+  /* 主色（沿用首页既有的蓝色主色，保持统一） */
+  --c-primary: #1a73e8;
+  --c-primary-hover: #1557b0;
+  --c-primary-soft: #e8f0fe;
+
+  /* 中性色：白底 + 浅灰分隔 */
+  --c-bg: #ffffff;
+  --c-bg-subtle: #fafbfc;
+  --c-bg-muted: #f5f6f7;
+  --c-border: #e5e7eb;
+  --c-border-strong: #d0d5dd;
+
+  /* 文本层级 */
+  --c-text: #202124;
+  --c-text-secondary: #5f6368;
+  --c-text-muted: #9aa0a6;
+
+  /* 批注语义色：仅用于纠错与标记 */
+  --c-error: #d93025;   /* 错误 / 删除 */
+  --c-ok: #188038;      /* 亮点 / 正确 */
+  --c-add: #1a73e8;     /* 润色对比中的新增内容 */
+  --c-del: #e8710a;     /* 润色对比中的删除内容 */
+
+  /* 圆角：统一 6–8px */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-pill: 999px;
+
+  /* 极轻阴影 */
+  --shadow-1: 0 1px 2px rgba(60, 64, 67, 0.08);
+  --shadow-2: 0 2px 8px rgba(60, 64, 67, 0.10);
+
+  /* 字号层级 */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+
+  /* 布局尺寸 */
+  --rail-width: 200px;        /* 批改页左栏 */
+  --panel-width: 380px;       /* 批改页右栏（360–400px） */
+  --topbar-height: 48px;      /* 顶栏固定高度 */
+  --toolbar-height: 44px;     /* 底栏固定高度 */
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color: #333;
-  background-color: #f5f5f5;
+  color: var(--c-text);
+  background-color: var(--c-bg);
 }
 
 #app {
@@ -443,3 +501,167 @@ body {
     padding-top: 55px;
   }
 }
+
+/*
+ * ============================================================================
+ * 公共组件样式（首页 + 批改页共用，保证两页观感统一）
+ * ============================================================================
+ */
+
+/* ---- 按钮：主操作 = 图标 + 文字；次要操作 = 描边按钮 ---- */
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: var(--fs-sm);
+  font-family: inherit;
+  color: var(--c-text);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .15s, border-color .15s, color .15s;
+}
+.ui-btn:hover:not(:disabled) { background: var(--c-bg-muted); border-color: var(--c-border-strong); }
+.ui-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.ui-btn--primary {
+  color: #fff;
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+}
+.ui-btn--primary:hover:not(:disabled) { background: var(--c-primary-hover); border-color: var(--c-primary-hover); }
+
+.ui-btn--ghost { border-color: transparent; background: transparent; }
+.ui-btn--ghost:hover:not(:disabled) { background: var(--c-bg-muted); border-color: transparent; }
+
+/* ---- 图标按钮：统一图标库 + 悬停显示名称 ---- */
+.ui-icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--c-text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background-color .15s, color .15s, border-color .15s;
+}
+.ui-icon-btn:hover:not(:disabled) { background: var(--c-bg-muted); color: var(--c-text); }
+.ui-icon-btn.is-active { background: var(--c-primary-soft); color: var(--c-primary); border-color: #c6dafc; }
+.ui-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* 悬停提示（tooltip）：由 data-tip 提供文案 */
+.ui-icon-btn[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 6px);
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  color: #fff;
+  background: rgba(32, 33, 36, .92);
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s;
+  z-index: 60;
+}
+.ui-icon-btn[data-tip]:hover::after { opacity: 1; }
+
+/* ---- 输入框 / 文本域 ---- */
+.ui-input,
+.ui-textarea {
+  width: 100%;
+  padding: 7px 10px;
+  font-size: var(--fs-md);
+  font-family: inherit;
+  color: var(--c-text);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.ui-input:focus,
+.ui-textarea:focus { border-color: var(--c-primary); box-shadow: 0 0 0 2px rgba(26, 115, 232, .14); }
+.ui-input:disabled,
+.ui-textarea:disabled { background: var(--c-bg-muted); cursor: not-allowed; }
+.ui-textarea { line-height: 1.6; resize: vertical; }
+
+/* ---- 选项芯片（体裁 / 年级）---- */
+.ui-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--fs-sm);
+  font-family: inherit;
+  color: var(--c-text-secondary);
+  background: var(--c-bg);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: all .15s;
+}
+.ui-chip:hover:not(:disabled) { background: var(--c-bg-muted); }
+.ui-chip.is-selected { color: var(--c-primary); background: var(--c-primary-soft); border-color: #c6dafc; font-weight: 600; }
+.ui-chip:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ---- 顶栏 / 底栏 ---- */
+.ui-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--topbar-height);
+  padding: 0 12px;
+  background: var(--c-bg);
+  border-bottom: 1px solid var(--c-border);
+  flex-shrink: 0;
+}
+.ui-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--toolbar-height);
+  padding: 0 8px;
+  background: var(--c-bg);
+  border-top: 1px solid var(--c-border);
+  flex-shrink: 0;
+}
+.ui-toolbar__divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 6px;
+  background: var(--c-border);
+}
+
+/* ---- 分隔线 ---- */
+.ui-hr { height: 1px; background: var(--c-border); border: none; margin: 0; }
+
+/* ---- 状态徽标 ---- */
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  font-size: var(--fs-xs);
+  border-radius: var(--r-pill);
+  font-weight: 500;
+}
+.ui-badge--pending { color: #8a5300; background: #fef7e0; }
+.ui-badge--running { color: var(--c-primary); background: var(--c-primary-soft); }
+.ui-badge--done    { color: var(--c-ok); background: #e6f4ea; }
+.ui-badge--failed  { color: var(--c-error); background: #fce8e6; }
+.ui-badge--muted   { color: var(--c-text-secondary); background: var(--c-bg-muted); }

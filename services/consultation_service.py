@@ -21,6 +21,7 @@
 from typing import Optional, Dict, Any, Tuple
 from model.factory import get_chat_model, is_model_initialized
 from agent.tools.react_agent import ReactAgent
+from utils.standard_loader import load_unified_standard
 import logging
 import re
 
@@ -85,67 +86,11 @@ class ConsultationService:
             ]
         }
         
-        # 预设作文知识问答（基于评分标准文档）
+        # 预设作文知识问答（基于统一评分标准文档《广东省中考作文评分标准.doc》）
         self._essay_knowledge = {
-            '议论文标准': """初中议论文评分标准（满分50分）：
-
-1. 立意与中心（10分）
-   - 中心突出、立意新颖、思想深刻
-
-2. 论点与论证（18分）
-   - 论点明确、深刻；论证充分、逻辑严密
-
-3. 结构与层次（8分）
-   - 结构完整、层次清晰、过渡自然
-
-4. 语言表达（10分）
-   - 语言流畅、准确生动、用词恰当
-
-5. 例证与材料运用（4分）
-   - 例证恰当、材料丰富、运用合理
-
-写作要点：明确提出观点，用事实和道理证明你的观点，结构要清晰。""",
-
-            '记叙文标准': """初中记叙文评分标准（满分50分）：
-
-1. 立意与中心（10分）
-   - 主题明确、中心突出、立意深刻
-
-2. 选材与内容（15分）
-   - 选材新颖、内容充实、感情真挚
-
-3. 结构与层次（8分）
-   - 结构完整、层次分明、过渡自然
-
-4. 语言表达（10分）
-   - 语言流畅、用词准确、描写生动
-
-5. 细节与表现（5分）
-   - 细节描写生动、表现力强
-
-6. 书写与规范（2分）
-   - 书写工整、格式规范
-
-写作要点：讲述一个完整的故事，要有生动的细节描写，表达真实的情感。""",
-
-            '说明文标准': """初中说明文评分标准（满分50分）：
-
-1. 立意与中心（17分）
-   - 说明对象明确、中心突出
-
-2. 结构与层次（17分）
-   - 结构清晰、层次分明、逻辑严谨
-
-3. 语言表达（13分）
-   - 语言准确、简洁明了、通俗易懂
-
-4. 方法与技巧（2分）
-   - 说明方法恰当、技巧运用熟练
-
-5. 书写与规范（1分）
-   - 书写工整、格式规范
-
-写作要点：清晰介绍事物的特征、原理或过程，使用恰当的说明方法。""",
+            '议论文标准': self._build_unified_standard_knowledge('议论文'),
+            '记叙文标准': self._build_unified_standard_knowledge('记叙文'),
+            '说明文标准': self._build_unified_standard_knowledge('说明文'),
 
             '写作技巧': """初中作文写作技巧：
 
@@ -295,7 +240,35 @@ class ConsultationService:
             # 其他无关内容
             '电影', '音乐', '游戏', '新闻', '体育', '明星', '八卦',
         ]
-    
+
+    def _build_unified_standard_knowledge(self, genre: str) -> str:
+        """
+        构建统一评分标准知识条目（依据《广东省中考作文评分标准.doc》）
+
+        参数：
+            genre: str - 作文体裁（议论文/记叙文/说明文）
+
+        返回：
+            str: 知识库回答文本
+        """
+        genre_guide = {
+            '议论文': '写简单的议论文，做到有理有据',
+            '记叙文': '写记叙文，做到内容具体充实',
+            '说明文': '写简单的说明文，做到明白清楚',
+        }.get(genre, '')
+        try:
+            standard = load_unified_standard()
+        except Exception as e:
+            logger.error(f"[知识库] 加载统一评分标准失败: {str(e)}")
+            standard = ''
+        return f"""初中作文统一评分标准（满分50分，依据《广东省中考作文评分标准.doc》）：
+
+{standard}
+
+本题材要点：{genre_guide}
+
+评分优先级：题目与题干要求优先于评分标准文件；评分标准文件仅作为辅助参考依据。"""
+
     @property
     def chat_model(self):
         """

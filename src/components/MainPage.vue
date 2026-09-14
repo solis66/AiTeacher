@@ -1,20 +1,19 @@
 <template>
-  <div class="main-page" :class="{'sidebar-collapsed': !isSidebarOpen}">
-    <!-- 左侧边栏 -->
-    <div class="sidebar" :class="{'sidebar-hidden': !isSidebarOpen}">
-      <!-- 顶部标题 -->
+  <div class="main-page" :class="{ 'reviewing': view === 'review' }">
+    <!-- ===================== 左侧边栏（批改结果页不显示） ===================== -->
+    <div v-if="view === 'chat'" class="sidebar">
       <div class="sidebar-header">
         <h1 class="system-title">AI智能批改教师</h1>
-        <button class="sidebar-toggle-btn" @click="toggleSidebar">
-          {{ isSidebarOpen ? '◀' : '▶' }}
-        </button>
       </div>
 
-      <!-- 按钮区域 -->
       <div class="sidebar-buttons">
         <button class="sidebar-action-btn" @click="newChat">
           <span class="btn-icon">+</span>
           <span class="btn-text">新对话</span>
+        </button>
+        <button class="sidebar-action-btn" @click="openReviewList">
+          <span class="btn-icon">📋</span>
+          <span class="btn-text">批改记录</span>
         </button>
         <button class="sidebar-action-btn" @click="syncHistory" :disabled="isSyncing">
           <span class="btn-icon">{{ isSyncing ? '⏳' : '🔄' }}</span>
@@ -22,7 +21,6 @@
         </button>
       </div>
 
-      <!-- 对话历史列表 -->
       <div class="history-section">
         <template v-for="(group, date) in groupedHistory" :key="date">
           <div class="history-group">
@@ -31,16 +29,15 @@
               v-for="chat in group"
               :key="chat.id"
               class="history-item"
-              :class="{'active': currentChatId === chat.id}"
+              :class="{ 'active': currentChatId === chat.id }"
               @click="loadChat(chat.id)"
             >
-              {{ (chat.messages[0]?.content || '').substring(0, 20) }}{{ (chat.messages[0]?.content || '').length > 20 ? '...' : '' }}
+              <span class="history-label">{{ historyLabel(chat) }}</span>
             </div>
           </div>
         </template>
       </div>
 
-      <!-- 用户信息 -->
       <div class="user-info-sidebar">
         <div class="avatar">{{ currentUser?.charAt(0).toUpperCase() || 'U' }}</div>
         <div class="user-details">
@@ -50,39 +47,38 @@
       </div>
     </div>
 
-    <!-- 主内容区域 -->
+    <!-- ===================== 主内容区 ===================== -->
     <div class="main-content">
-      <!-- 侧边栏隐藏时显示的工具栏 -->
-      <div v-if="!isSidebarOpen" class="collapsed-toolbar">
-        <button class="collapsed-btn" @click="toggleSidebar" title="展开侧边栏">
-          ▶
-        </button>
-        <button class="collapsed-action-btn" @click="newChat" title="新对话">
-          <span>+</span>
-        </button>
-        <button class="collapsed-action-btn" @click="syncHistory" :disabled="isSyncing" title="同步">
-          <span>{{ isSyncing ? '⏳' : '🔄' }}</span>
-        </button>
-      </div>
 
-      <!-- 对话历史 -->
-      <ChatHistory 
-        :messages="messages" 
-        @preview-image="previewImageFull"
-      />
+      <!-- 视图一：AI 对话首页 -->
+      <template v-if="view === 'chat'">
+        <ChatHistory
+          :messages="messages"
+          :username="currentUser"
+          @preview-image="previewImageFull"
+          @open-review="openReview"
+          @retry-review="retryReview"
+        />
+        <InputArea
+          v-model="inputText"
+          :grade="selectedGrade"
+          :is-loading="isLoading"
+          @update:grade="selectGrade"
+          @send="handleSend"
+          @error="showError"
+        />
+      </template>
 
-      <!-- 输入区域 -->
-      <InputArea
-        v-model="inputText"
-        :essay-type="selectedEssayType"
-        :is-loading="isLoading"
-        @update:essay-type="selectEssayType"
-        @send="handleSend"
-        @file-upload="handleFileUpload"
+      <!-- 视图二：独立的作文批改结果页 -->
+      <ReviewWorkbench
+        v-else
+        :review-id="activeReviewId"
+        :username="currentUser"
+        @back="backToChat"
       />
     </div>
 
-    <!-- 错误提示弹窗 -->
+    <!-- 错误提示 -->
     <div v-if="errorMessage" class="error-toast">
       <div class="error-content">
         <span class="error-icon">⚠️</span>
@@ -91,198 +87,404 @@
       </div>
     </div>
 
-    <!-- 全屏图片预览模态框 -->
+    <!-- 全屏图片预览 -->
     <div v-if="fullscreenImage" class="fullscreen-overlay" @click="closeFullscreenImage">
       <div class="fullscreen-content" @click.stop>
         <img :src="fullscreenImage" alt="全屏预览" class="fullscreen-img" />
         <button class="fullscreen-close" @click="closeFullscreenImage">×</button>
       </div>
     </div>
-
-    
   </div>
 </template>
 
 <script setup>
+/**
+ * 主页面
+ *
+ * 本次变更（对应需求「优化首页 AI 对话界面，新增独立的作文批改结果页」）：
+ * 1. 新增视图切换：'chat'（对话首页）与 'review'（批改工作台），登录页保持不变。
+ *    未引入 vue-router，返回首页时会话、附件与批改入口全部保留。
+ * 2. 作文提交改走批改工作台接口（POST /api/review），不再在对话里直接出报告。
+ * 3. 提交后轮询批改状态，分别落到「批改中 / 完成入口 / 失败重试」三种消息形态。
+ * 4. 咨询类提问仍走原有的 /chat 接口。
+ */
+
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import axios from 'axios';
 import ChatHistory from './ChatHistory.vue';
 import InputArea from './InputArea.vue';
+import ReviewWorkbench from './review/ReviewWorkbench.vue';
+import { reviewPageUrl } from '../utils/reviewUrl.js';
 
-// 定义emit事件
 const emit = defineEmits(['logout']);
 
-// 认证相关状态
+// ---------------- 认证与全局状态 ----------------
 const currentUser = ref('');
 const isSyncing = ref(false);
 const fullscreenImage = ref(null);
+const errorMessage = ref('');
 
-// 消息和聊天相关状态
+// ---------------- 视图状态 ----------------
+const view = ref('chat');
+const activeReviewId = ref(null);
+
+// ---------------- 对话状态 ----------------
 const messages = ref([]);
 const inputText = ref('');
 const isLoading = ref(false);
-const isSidebarOpen = ref(true);
-const errorMessage = ref('');
 const chatHistory = ref([]);
 const currentChatId = ref(null);
 const isCreatingChat = ref(false);
 
-// 作文体裁选择状态
-const selectedEssayType = ref('');
+// ---------------- 输入区状态 ----------------
+const selectedGrade = ref('');
 
 let dateCheckTimer = null;
 let lastCheckedDate = '';
+const pollTimers = new Map();   // reviewId -> timer，避免组件销毁后继续轮询
 
-// 常量定义
 const STORAGE_KEY = 'ai_teacher_chat_history';
 const TOKEN_KEY = 'ai_teacher_token';
 const MAX_HISTORY = 100;
 const MAX_HISTORY_DAYS = 7;
+const POLL_INTERVAL = 2500;     // 批改状态轮询间隔（毫秒）
 
-const essayKeywords = ['作文', '文章', '写作', ' essay', '作文题', '请批改', '请点评', '写一篇', '写了一篇', '字数', '段落', '开头', '结尾', '议论文', '记叙文', '说明文'];
-const consultationKeywords = ['如何', '怎么', '怎样', '为什么', '请问', '我想问', '问一下', '咨询', '方法', '技巧', '策略', '要点', '建议', '告诉我', '分析一下'];
+const essayKeywords = ['作文', '文章', '写作', 'essay', '作文题', '请批改', '请点评', '写一篇', '写了一篇',
+  '字数', '段落', '开头', '结尾', '议论文', '记叙文', '说明文'];
+const consultationKeywords = ['如何', '怎么', '怎样', '为什么', '请问', '我想问', '问一下', '咨询',
+  '方法', '技巧', '策略', '要点', '建议', '告诉我', '分析一下'];
 
-// 按日期分组的历史记录
+// ---------------- 历史记录分组 ----------------
 const groupedHistory = computed(() => {
   const groups = {};
-  chatHistory.value.forEach(chat => {
+  chatHistory.value.forEach((chat) => {
     const displayDate = chat.displayDate || formatDate(chat.date);
-    if (!groups[displayDate]) {
-      groups[displayDate] = [];
-    }
+    if (!groups[displayDate]) groups[displayDate] = [];
     groups[displayDate].push(chat);
   });
-  
+
   const dateOrder = ['现在', '今天', '昨天'];
   const sortedDates = Object.keys(groups).sort((a, b) => {
     const indexA = dateOrder.indexOf(a);
     const indexB = dateOrder.indexOf(b);
-    if (indexA !== -1 && indexB !== -1) {
-      return indexA - indexB;
-    }
+    if (indexA !== -1 && indexB !== -1) return indexA - indexB;
     if (indexA !== -1) return -1;
     if (indexB !== -1) return 1;
     return b.localeCompare(a);
   });
-  
-  const sortedGroups = {};
-  sortedDates.forEach(date => {
-    sortedGroups[date] = groups[date];
-  });
-  return sortedGroups;
+
+  const sorted = {};
+  sortedDates.forEach((date) => { sorted[date] = groups[date]; });
+  return sorted;
 });
 
+/** 侧边栏历史条目文案：优先显示题目，其次显示正文开头 */
+const historyLabel = (chat) => {
+  const first = chat.messages?.[0] || {};
+  const text = first.title || first.content || '新对话';
+  return text.length > 18 ? `${text.slice(0, 18)}...` : text;
+};
+
+// ---------------- 通用工具 ----------------
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+
+const showError = (message) => {
+  errorMessage.value = message;
+  setTimeout(() => { errorMessage.value = ''; }, 5000);
+};
+
 /**
- * 判断是否为作文提交
- * 
- * 判断逻辑（优先按文本长度判断，关键词作为辅助）：
- * 1. 最小长度检查：至少100字才可能是作文
- * 2. 长文本优先判定：超过500字且包含作文关键词，直接判定为作文
- * 3. 超长文本（超过800字）直接判定为作文，无需关键词
- * 4. 咨询类问题排除（仅适用于短文本）
- * 5. 包含作文关键词且文本较长（>200字），判定为作文提交
- * 6. 纯长文本（超过500字）也判定为作文提交
- * 
- * @param {string} text - 用户输入的文本内容
- * @returns {boolean} - 是否为作文提交
+ * 作文提交判定（仅在用户没有主动选择体裁/年级时作为兜底）
+ *
+ * 规则：
+ *  1. 少于 100 字：不是作文，直接按咨询处理
+ *  2. 命中咨询关键词且未命中作文关键词：按咨询处理（避免“我想问…”被误判）
+ *  3. 命中作文关键词：按作文处理
+ *  4. 都没有：按篇幅判断。原阈值 500 字对初中作文过高——一篇 200 多字的
+ *     短文会被误判成咨询，直接送到问答链路。这里降到 200 字。
  */
 const isEssaySubmission = (text) => {
-  if (!text || typeof text !== 'string') return false;
-  
-  const trimmedText = text.trim();
-  const textLength = trimmedText.length;
-  
-  // 1. 最小长度检查：至少100字才可能是作文
-  if (textLength < 100) {
-    console.log('[作文检测] 文本过短(' + textLength + '字)，不是作文提交');
-    return false;
-  }
-  
-  const hasEssayKeywords = essayKeywords.some(kw => trimmedText.includes(kw));
-  const hasConsultKeywords = consultationKeywords.some(kw => trimmedText.includes(kw));
-  const isLongText = textLength > 200;
-  
-  // 2. 长文本优先判定：超过500字且包含作文关键词，直接判定为作文
-  //    即使包含咨询关键词也优先考虑是作文（用户可能在作文中提问）
-  if (textLength > 500 && hasEssayKeywords) {
-    console.log('[作文检测] 长文本(' + textLength + '字)且包含作文关键词，判定为作文提交');
-    return true;
-  }
-  
-  // 3. 超长文本（超过800字）直接判定为作文，无需关键词
-  if (textLength > 800) {
-    console.log('[作文检测] 超长文本(' + textLength + '字)，直接判定为作文提交');
-    return true;
-  }
-  
-  // 4. 咨询类问题排除（仅适用于短文本）
-  if (hasConsultKeywords && !hasEssayKeywords && textLength < 300) {
-    console.log('[作文检测] 短文本且包含咨询关键词，不是作文提交');
-    return false;
-  }
-  
-  // 5. 包含作文关键词且文本较长，判定为作文提交
-  if (hasEssayKeywords && isLongText) {
-    console.log('[作文检测] 包含作文关键词且文本较长(' + textLength + '字)，判定为作文提交');
-    return true;
-  }
-  
-  // 6. 纯长文本（超过500字）也判定为作文提交
-  if (textLength > 500) {
-    console.log('[作文检测] 文本超过500字(' + textLength + '字)，判定为作文提交');
-    return true;
-  }
-  
-  // 7. 中等长度文本（200-500字）需要包含作文关键词才判定为作文
-  if (isLongText && hasEssayKeywords) {
-    console.log('[作文检测] 中等长度文本(' + textLength + '字)且包含作文关键词，判定为作文提交');
-    return true;
-  }
-  
-  console.log('[作文检测] 未满足作文提交条件，文本长度:' + textLength + '字');
-  return false;
+  const trimmed = (text || '').trim();
+  const len = trimmed.length;
+  if (len < 100) return false;
+
+  const hasEssayKeywords = essayKeywords.some((kw) => trimmed.includes(kw));
+  const hasConsultKeywords = consultationKeywords.some((kw) => trimmed.includes(kw));
+
+  if (hasConsultKeywords && !hasEssayKeywords) return false;
+  if (hasEssayKeywords) return true;
+  return len >= 200;
 };
 
-// 获取认证令牌
-const getToken = () => {
-  return localStorage.getItem(TOKEN_KEY);
+// ---------------- 发送流程 ----------------
+/**
+ * 处理发送
+ *
+ * 分支：
+ *  - 作文（含附件/命题信息/长正文）→ 创建批改任务并轮询
+ *  - 其他 → 走咨询问答
+ */
+const handleSend = async ({ content, grade, title, requirements, attachments }) => {
+  const userMessage = (content || '').trim();
+  const hasAttachments = (attachments || []).length > 0;
+  // 主动选择了年级，或填写了题目/题干，等于明确表示「这次是作文」，不再交给关键词猜测。
+  // 提交成功后会把年级清空，避免下一条咨询消息被误判成作文。
+  const hasMeta = !!(title || requirements || grade);
+  const isEssay = hasAttachments || hasMeta || isEssaySubmission(userMessage);
+
+  if (isEssay) {
+    // 年级必须选择后才能提交；体裁已移除，由 AI 依据题干要求判定
+    if (!grade) return showError('请先选择年级（七年级、八年级或九年级）');
+    if (!userMessage && !hasAttachments) return showError('请填写作文正文，或上传作文图片 / PDF');
+  } else if (!userMessage) {
+    return showError('请输入内容');
+  }
+
+  // 用户消息：正文 + 命题信息 + 附件（保留对象引用，便于批改 ID 回填）
+  const userMsg = {
+    role: 'user',
+    content: userMessage,
+    type: isEssay ? 'essay_submission' : 'normal',
+    essayType: null,
+    grade: isEssay ? grade : null,
+    title: isEssay ? title : '',
+    requirements: isEssay ? requirements : '',
+    attachments: (attachments || []).map((att) => ({ kind: att.kind, name: att.name, url: att.url })),
+    timestamp: Date.now()
+  };
+  messages.value.push(userMsg);
+
+  if (!isEssay) {
+    await sendConsultation(userMessage);
+    return;
+  }
+  await submitReview({ userMsg, userMessage, grade, title, requirements, attachments });
+
+  // 年级是一次性表单选择，提交后清空：下一条消息默认按咨询处理，
+  // 需要再批改时重新选择即可（否则残存的选择会把咨询问题误送进批改链路）。
+  selectedGrade.value = '';
 };
 
-// 用户登出
+/** 提交批改任务并进入轮询 */
+const submitReview = async ({ userMsg, userMessage, grade, title, requirements, attachments }) => {
+  isLoading.value = true;
+
+  // 先插入“批改中”占位，用户立刻能看到状态
+  const pendingMessage = {
+    role: 'assistant',
+    type: 'review_pending',
+    status: 'loading',
+    reviewId: null,
+    timestamp: Date.now()
+  };
+  messages.value.push(pendingMessage);
+
+  try {
+    const formData = new FormData();
+    formData.append('grade', grade);
+    formData.append('title', title || '');
+    formData.append('requirements', requirements || '');
+    formData.append('body', userMessage || '');
+    // 按用户在输入区排好的顺序追加附件
+    (attachments || []).forEach((att) => formData.append('files', att.file, att.name));
+
+    const response = await axios.post('/api/review', formData, {
+      headers: { 'X-Username': currentUser.value || 'anonymous' }
+    });
+
+    if (!response.data.success) {
+      replaceMessage(pendingMessage, {
+        role: 'assistant',
+        type: 'review_failed',
+        error: response.data.message || '创建批改任务失败',
+        timestamp: Date.now()
+      });
+      return;
+    }
+
+    const review = response.data.data;
+    // 占位消息绑定批改 ID，后续轮询就地更新
+    pendingMessage.reviewId = review.id;
+    // 把批改 ID 回填到用户消息，便于返回首页/刷新后仍能取到缩略图与批改入口
+    userMsg.reviewId = review.id;
+
+    saveCurrentChat();
+    startPolling(review.id, pendingMessage);
+  } catch (error) {
+    replaceMessage(pendingMessage, {
+      role: 'assistant',
+      type: 'review_failed',
+      error: error.response?.data?.message || '网络连接失败，请检查后端服务是否启动',
+      timestamp: Date.now()
+    });
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+/** 轮询批改状态，直到完成或失败 */
+const startPolling = (reviewId, message) => {
+  stopPolling(reviewId);
+  const tick = async () => {
+    try {
+      const response = await axios.get(`/api/review/${reviewId}`, {
+        headers: { 'X-Username': currentUser.value || 'anonymous' }
+      });
+      if (!response.data.success) return;
+      const data = response.data.data;
+
+      if (data.status === 'done') {
+        stopPolling(reviewId);
+        replaceMessage(message, {
+          role: 'assistant',
+          type: 'review_entry',
+          reviewId,
+          essayType: data.input?.essay_type,
+          score: data.score,
+          rating: data.rating,
+          pageCount: data.page_count,
+          // 只存文件名，图片地址在渲染时按 owner 现算（见 ChatHistory.entryThumb）
+          thumb: data.thumb || 'page-1.jpg',
+          thumbUrl: data.thumb ? reviewPageUrl(reviewId, data.thumb, currentUser.value) : '',
+          timestamp: Date.now()
+        });
+        saveCurrentChat();
+      } else if (data.status === 'failed') {
+        stopPolling(reviewId);
+        replaceMessage(message, {
+          role: 'assistant',
+          type: 'review_failed',
+          reviewId,
+          error: data.error || '批改失败，请重试',
+          timestamp: Date.now()
+        });
+        saveCurrentChat();
+      }
+    } catch (error) {
+      // 轮询期间的网络抖动不立即判失败，继续按间隔重试
+      console.warn('[批改轮询] 请求失败，稍后重试', error?.message);
+    }
+  };
+  tick();
+  pollTimers.set(reviewId, setInterval(tick, POLL_INTERVAL));
+};
+
+const stopPolling = (reviewId) => {
+  const timer = pollTimers.get(reviewId);
+  if (timer) {
+    clearInterval(timer);
+    pollTimers.delete(reviewId);
+  }
+};
+
+/** 就地替换消息（保持列表长度与滚动位置稳定） */
+const replaceMessage = (target, replacement) => {
+  const index = messages.value.indexOf(target);
+  if (index !== -1) messages.value[index] = replacement;
+};
+
+/** 失败重试：复用已上传材料，只重跑批改 */
+const retryReview = async (reviewId) => {
+  const message = messages.value.find((m) => m.reviewId === reviewId && m.type === 'review_failed');
+  if (!message) return;
+  try {
+    await axios.post(`/api/review/${reviewId}/retry`, {}, {
+      headers: { 'X-Username': currentUser.value || 'anonymous' }
+    });
+    replaceMessage(message, {
+      role: 'assistant',
+      type: 'review_pending',
+      status: 'loading',
+      reviewId,
+      timestamp: Date.now()
+    });
+    startPolling(reviewId, messages.value.find((m) => m.reviewId === reviewId && m.type === 'review_pending'));
+    saveCurrentChat();
+  } catch (error) {
+    showError(error.response?.data?.message || '重试失败，请稍后再试');
+  }
+};
+
+/** 咨询类对话（沿用原有 /chat 接口） */
+const sendConsultation = async (userMessage) => {
+  isLoading.value = true;
+  const pending = { role: 'assistant', content: '', type: 'loading', status: 'loading', timestamp: Date.now() };
+  messages.value.push(pending);
+  try {
+    const response = await axios.post('/chat', { message: userMessage, type: 'consultation' });
+    if (response.data.success) {
+      const data = response.data.data;
+      replaceMessage(pending, {
+        role: 'assistant',
+        content: data.raw_response || data.overall_comment || '',
+        type: 'normal',
+        timestamp: Date.now()
+      });
+    } else {
+      replaceMessage(pending, {
+        role: 'assistant',
+        content: response.data.message || '处理请求失败，请稍后重试。',
+        type: 'normal',
+        timestamp: Date.now()
+      });
+    }
+  } catch (error) {
+    replaceMessage(pending, {
+      role: 'assistant',
+      content: error.response?.data?.message || '网络连接失败，请检查后端服务是否启动',
+      type: 'normal',
+      timestamp: Date.now()
+    });
+  } finally {
+    isLoading.value = false;
+    saveCurrentChat();
+  }
+};
+
+// ---------------- 视图切换 ----------------
+/** 打开批改页（从对话入口或历史记录 ID） */
+const openReview = (reviewId) => {
+  if (!reviewId) return;
+  activeReviewId.value = reviewId;
+  view.value = 'review';
+};
+
+/** 左侧「批改记录」：直接进入批改工作台（左侧列表可按 ID 再次打开） */
+const openReviewList = () => {
+  activeReviewId.value = activeReviewId.value || null;
+  view.value = 'review';
+};
+
+const backToChat = () => {
+  view.value = 'chat';
+  saveCurrentChat();
+};
+
+// ---------------- 会话与历史记录 ----------------
+const selectGrade = (grade) => { selectedGrade.value = grade; };
+
 const handleLogout = () => {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem('ai_teacher_user');
   emit('logout');
 };
 
-// 从服务器加载历史记录
 const loadHistoryFromServer = async () => {
   const token = getToken();
   if (!token) return;
-  
   try {
-    const response = await axios.get('/get_history', {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    
+    const response = await axios.get('/get_history', { headers: { Authorization: `Bearer ${token}` } });
     if (response.data.success) {
-      const serverHistory = response.data.history;
-      const localHistory = loadLocalHistory();
-      const mergedHistory = mergeHistory(serverHistory, localHistory);
-      
+      const mergedHistory = mergeHistory(response.data.history, loadLocalHistory());
       chatHistory.value = mergedHistory
-        .filter(chat => chat.messages && chat.messages.length > 0 && isDateWithinWeek(chat.date))
-        .map(chat => ({
-          ...chat,
-          displayDate: formatDate(chat.date)
-        }));
-      
+        .filter((chat) => chat.messages && chat.messages.length > 0 && isDateWithinWeek(chat.date))
+        .map((chat) => ({ ...chat, displayDate: formatDate(chat.date), reviewId: findReviewId(chat) }));
       saveLocalHistory(chatHistory.value);
-      
+
       if (chatHistory.value.length > 0) {
         const lastChat = chatHistory.value[0];
         currentChatId.value = lastChat.id;
-        messages.value = [...lastChat.messages];
+        messages.value = hydrateAttachments([...lastChat.messages]);
       } else {
         createNewChat(true);
       }
@@ -293,30 +495,17 @@ const loadHistoryFromServer = async () => {
   }
 };
 
-// 同步历史记录到服务器
 const syncHistory = async () => {
   const token = getToken();
   if (!token) return;
-  
   isSyncing.value = true;
   try {
-    const historyToSync = chatHistory.value.map(chat => ({
-      id: chat.id,
-      date: chat.date,
-      messages: chat.messages
+    const historyToSync = chatHistory.value.map((chat) => ({
+      id: chat.id, date: chat.date, messages: chat.messages
     }));
-    
-    const response = await axios.post('/save_history', {
-      history: historyToSync
-    }, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    
-    if (response.data.success) {
-      showError('历史记录同步成功');
-    } else {
-      showError('同步失败');
-    }
+    const response = await axios.post('/save_history', { history: historyToSync },
+      { headers: { Authorization: `Bearer ${token}` } });
+    showError(response.data.success ? '历史记录同步成功' : '同步失败');
   } catch (error) {
     showError('同步失败，请检查网络连接');
   } finally {
@@ -324,19 +513,38 @@ const syncHistory = async () => {
   }
 };
 
-// 合并历史记录
+/** 从消息中提取批改 ID，用于历史条目标记与缩略图恢复 */
+const findReviewId = (chat) => {
+  const hit = (chat.messages || []).find((m) => m.reviewId);
+  return hit ? hit.reviewId : null;
+};
+
+/**
+ * 历史回填：刷新页面后，附件缩略图通过批改记录的首屏图片恢复，
+ * 这样“返回首页后保留附件与批改入口”在重新加载后依然成立。
+ */
+const hydrateAttachments = (msgs) =>
+  msgs.map((msg) => {
+    if (msg.role !== 'user' || !msg.reviewId || !msg.attachments?.length) return msg;
+    return {
+      ...msg,
+      // 已落库的图片一律按 reviewId 重新生成地址：消息会写进 localStorage，
+      // 里面存的 blob:/旧地址在刷新后必然失效，不能直接复用。
+      attachments: msg.attachments.map((att) => (
+        att.kind === 'image'
+          ? { ...att, url: reviewPageUrl(msg.reviewId, 'page-1.jpg', currentUser.value) }
+          : att
+      ))
+    };
+  });
+
 const mergeHistory = (serverHistory, localHistory) => {
   const merged = {};
-  localHistory.forEach(chat => {
-    merged[chat.id] = chat;
-  });
-  serverHistory.forEach(chat => {
-    merged[chat.id] = chat;
-  });
+  localHistory.forEach((chat) => { merged[chat.id] = chat; });
+  serverHistory.forEach((chat) => { merged[chat.id] = chat; });
   return Object.values(merged).sort((a, b) => new Date(b.date) - new Date(a.date));
 };
 
-// 加载本地历史记录
 const loadLocalHistory = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -346,44 +554,32 @@ const loadLocalHistory = () => {
   }
 };
 
-// 保存本地历史记录
 const saveLocalHistory = (history) => {
   try {
-    const dataToSave = history.map(chat => ({
-      id: chat.id,
-      date: chat.date,
-      messages: chat.messages
-    })).filter(chat => isDateWithinWeek(chat.date)).slice(0, MAX_HISTORY);
+    const dataToSave = history.map((chat) => ({
+      id: chat.id, date: chat.date, messages: chat.messages
+    })).filter((chat) => isDateWithinWeek(chat.date)).slice(0, MAX_HISTORY);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
   } catch (e) {
     console.error('保存本地历史记录失败:', e);
   }
 };
 
-// 从本地加载历史记录数据
 const loadLocalHistoryData = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
-      const history = JSON.parse(saved);
-      chatHistory.value = history
-        .filter(chat => chat.messages && chat.messages.length > 0 && isDateWithinWeek(chat.date))
-        .map(chat => ({
-          ...chat,
-          displayDate: formatDate(chat.date)
-        }));
+      chatHistory.value = JSON.parse(saved)
+        .filter((chat) => chat.messages && chat.messages.length > 0 && isDateWithinWeek(chat.date))
+        .map((chat) => ({ ...chat, displayDate: formatDate(chat.date), reviewId: findReviewId(chat) }));
     }
   } catch (e) {
     chatHistory.value = [];
   }
 };
 
-// 生成唯一ID
-const generateId = () => {
-  return Date.now().toString(36) + Math.random().toString(36).substr(2);
-};
+const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
 
-// 检查日期是否在最近一周内
 const isDateWithinWeek = (dateStr) => {
   const [year, month, day] = dateStr.split('-').map(Number);
   const date = new Date(year, month - 1, day);
@@ -392,104 +588,68 @@ const isDateWithinWeek = (dateStr) => {
   return date >= weekAgo;
 };
 
-// 获取今天的日期信息
 const getTodayDate = () => {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
   const day = now.getDate();
-  const today = new Date(year, month, day);
   const yesterday = new Date(year, month, day - 1);
-  
-  const todayStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-  
-  return { todayStr, yesterdayStr };
+  const pad = (n) => String(n).padStart(2, '0');
+  return {
+    todayStr: `${year}-${pad(month + 1)}-${pad(day)}`,
+    yesterdayStr: `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`
+  };
 };
 
-// 格式化日期显示
 const formatDate = (dateStr) => {
   const { todayStr, yesterdayStr } = getTodayDate();
   const normalizedDate = normalizeDate(dateStr);
-  
   if (!normalizedDate) return dateStr;
   if (normalizedDate === todayStr) return '今天';
   if (normalizedDate === yesterdayStr) return '昨天';
-  
   const [year, month, day] = normalizedDate.split('-');
   return `${year}/${month}/${day}`;
 };
 
-// 解析中文日期
+const normalizeDate = (dateStr) => {
+  if (!dateStr) return null;
+  const trimmed = dateStr.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  return parseChineseDate(trimmed);
+};
+
 const parseChineseDate = (chineseDate) => {
-  const monthMap = {
-    '一月': '01', '二月': '02', '三月': '03', '四月': '04',
-    '五月': '05', '六月': '06', '七月': '07', '八月': '08',
-    '九月': '09', '十月': '10', '十一月': '11', '十二月': '12'
-  };
-  
-  const dayMap = {
-    '一号': '01', '二号': '02', '三号': '03', '四号': '04', '五号': '05',
-    '六号': '06', '七号': '07', '八号': '08', '九号': '09', '十号': '10',
-    '十一号': '11', '十二号': '12', '十三号': '13', '十四号': '14', '十五号': '15',
-    '十六号': '16', '十七号': '17', '十八号': '18', '十九号': '19', '二十号': '20',
-    '二十一号': '21', '二十二号': '22', '二十三号': '23', '二十四号': '24', '二十五号': '25',
-    '二十六号': '26', '二十七号': '27', '二十八号': '28', '二十九号': '29', '三十号': '30',
-    '三十一号': '31'
-  };
-  
-  const now = new Date();
-  const year = now.getFullYear();
-  
+  const monthMap = { '一月': '01', '二月': '02', '三月': '03', '四月': '04', '五月': '05', '六月': '06',
+    '七月': '07', '八月': '08', '九月': '09', '十月': '10', '十一月': '11', '十二月': '12' };
+  const dayMap = {};
+  ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五',
+    '十六', '十七', '十八', '十九', '二十', '二十一', '二十二', '二十三', '二十四', '二十五', '二十六',
+    '二十七', '二十八', '二十九', '三十', '三十一'].forEach((cn, i) => { dayMap[`${cn}号`] = String(i + 1).padStart(2, '0'); });
+  const year = new Date().getFullYear();
   for (const [monthCN, monthNum] of Object.entries(monthMap)) {
     if (chineseDate.includes(monthCN)) {
       for (const [dayCN, dayNum] of Object.entries(dayMap)) {
-        if (chineseDate.includes(dayCN)) {
-          return `${year}-${monthNum}-${dayNum}`;
-        }
+        if (chineseDate.includes(dayCN)) return `${year}-${monthNum}-${dayNum}`;
       }
     }
   }
   return null;
 };
 
-// 规范化日期格式
-const normalizeDate = (dateStr) => {
-  if (!dateStr) return null;
-  dateStr = dateStr.trim();
-  
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-    return dateStr;
-  }
-  
-  const parsed = parseChineseDate(dateStr);
-  if (parsed) return parsed;
-  
-  return null;
-};
-
-// 刷新显示日期
 const refreshDisplayDates = () => {
-  chatHistory.value = chatHistory.value.map(chat => ({
-    ...chat,
-    displayDate: formatDate(chat.date)
-  }));
+  chatHistory.value = chatHistory.value.map((chat) => ({ ...chat, displayDate: formatDate(chat.date) }));
 };
 
-// 启动日期检查定时器
 const startDateCheckTimer = () => {
   const checkDateChange = () => {
     const { todayStr } = getTodayDate();
-    if (lastCheckedDate && lastCheckedDate !== todayStr) {
-      refreshDisplayDates();
-    }
+    if (lastCheckedDate && lastCheckedDate !== todayStr) refreshDisplayDates();
     lastCheckedDate = todayStr;
   };
   checkDateChange();
   dateCheckTimer = setInterval(checkDateChange, 60000);
 };
 
-// 停止日期检查定时器
 const stopDateCheckTimer = () => {
   if (dateCheckTimer) {
     clearInterval(dateCheckTimer);
@@ -497,38 +657,20 @@ const stopDateCheckTimer = () => {
   }
 };
 
-// 创建新对话
 const createNewChat = (force = false) => {
-  if (!force && messages.value.length === 0 && chatHistory.value.length > 0) {
-    return currentChatId.value;
-  }
-  
+  if (!force && messages.value.length === 0 && chatHistory.value.length > 0) return currentChatId.value;
   const id = generateId();
   const { todayStr } = getTodayDate();
-  
-  const existingNowIndex = chatHistory.value.findIndex(c => c.displayDate === '现在');
-  if (existingNowIndex !== -1) {
-    chatHistory.value.splice(existingNowIndex, 1);
-  }
-  
-  const tempChat = {
-    id,
-    date: todayStr,
-    displayDate: '现在',
-    isTemp: true,
-    messages: []
-  };
-  
-  chatHistory.value.unshift(tempChat);
+  const existingNowIndex = chatHistory.value.findIndex((c) => c.displayDate === '现在');
+  if (existingNowIndex !== -1) chatHistory.value.splice(existingNowIndex, 1);
+  chatHistory.value.unshift({ id, date: todayStr, displayDate: '现在', isTemp: true, messages: [] });
   currentChatId.value = id;
   messages.value = [];
   return id;
 };
 
-// 新建对话按钮点击处理
 const newChat = () => {
   if (isCreatingChat.value) return;
-  
   isCreatingChat.value = true;
   try {
     if (messages.value.length > 0) {
@@ -540,118 +682,75 @@ const newChat = () => {
   } finally {
     isCreatingChat.value = false;
   }
-  
   inputText.value = '';
-  selectedEssayType.value = '';
+  selectedGrade.value = '';
+  view.value = 'chat';
+  activeReviewId.value = null;
 };
 
-// 保存当前对话
 const saveCurrentChat = () => {
   if (!currentChatId.value || messages.value.length === 0) return;
-  
-  const chatIndex = chatHistory.value.findIndex(c => c.id === currentChatId.value);
+  const chatIndex = chatHistory.value.findIndex((c) => c.id === currentChatId.value);
   if (chatIndex !== -1) {
     chatHistory.value[chatIndex].messages = [...messages.value];
     chatHistory.value[chatIndex].displayDate = formatDate(chatHistory.value[chatIndex].date);
+    chatHistory.value[chatIndex].reviewId = findReviewId(chatHistory.value[chatIndex]);
     saveHistory();
-    
-    if (currentUser.value) {
-      syncHistory();
-    }
+    if (currentUser.value) syncHistory();
   }
 };
 
-// 加载指定对话
 const loadChat = (chatId) => {
-  if (currentChatId.value === chatId) return;
-  
+  if (currentChatId.value === chatId) { view.value = 'chat'; return; }
   saveCurrentChat();
-  
-  const chat = chatHistory.value.find(c => c.id === chatId);
+  const chat = chatHistory.value.find((c) => c.id === chatId);
   if (chat) {
     currentChatId.value = chatId;
-    messages.value = [...chat.messages];
+    messages.value = hydrateAttachments([...chat.messages]);
+    view.value = 'chat';
+    activeReviewId.value = null;
   }
 };
 
-// 切换侧边栏显示/隐藏状态
-const toggleSidebar = () => {
-  isSidebarOpen.value = !isSidebarOpen.value;
-};
-
-// 加载历史记录
-const loadHistory = () => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const history = JSON.parse(saved);
-      chatHistory.value = history
-        .filter(chat => chat.messages && chat.messages.length > 0 && isDateWithinWeek(chat.date))
-        .map(chat => ({
-          ...chat,
-          displayDate: formatDate(chat.date)
-        }));
-    }
-  } catch (e) {
-    console.error('加载历史记录失败:', e);
-    chatHistory.value = [];
-  }
-};
-
-// 保存历史记录
 const saveHistory = () => {
   try {
-    let dataToSave = chatHistory.value.map(chat => ({
-      id: chat.id,
-      date: chat.date,
-      messages: chat.messages
-    }));
-    
-    dataToSave = dataToSave.filter(chat => isDateWithinWeek(chat.date) && chat.messages.length > 0);
-    
-    if (dataToSave.length > MAX_HISTORY) {
-      dataToSave = dataToSave.slice(0, MAX_HISTORY);
-    }
-    
+    let dataToSave = chatHistory.value.map((chat) => ({ id: chat.id, date: chat.date, messages: chat.messages }));
+    dataToSave = dataToSave.filter((chat) => isDateWithinWeek(chat.date) && chat.messages.length > 0);
+    if (dataToSave.length > MAX_HISTORY) dataToSave = dataToSave.slice(0, MAX_HISTORY);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
   } catch (e) {
     console.error('保存历史记录失败:', e);
   }
 };
 
-// 页面加载时执行
+// ---------------- 生命周期 ----------------
 onMounted(() => {
   currentUser.value = localStorage.getItem('ai_teacher_user') || '';
   const token = getToken();
-  
   if (token) {
     verifyTokenAndLoad(token);
   } else {
     loadLocalHistoryData();
     startDateCheckTimer();
-    
     if (chatHistory.value.length === 0) {
       createNewChat(true);
     } else {
       const lastChat = chatHistory.value[0];
-      if (lastChat && lastChat.messages.length > 0) {
-        currentChatId.value = lastChat.id;
-        messages.value = [...lastChat.messages];
-      } else {
-        currentChatId.value = lastChat.id;
-        messages.value = [];
-      }
+      currentChatId.value = lastChat.id;
+      messages.value = hydrateAttachments([...lastChat.messages]);
     }
   }
 });
 
-// 验证token并加载历史记录
+onUnmounted(() => {
+  stopDateCheckTimer();
+  pollTimers.forEach((timer) => clearInterval(timer));
+  pollTimers.clear();
+});
+
 const verifyTokenAndLoad = async (token) => {
   try {
-    const response = await axios.get('/get_history', {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    
+    const response = await axios.get('/get_history', { headers: { Authorization: `Bearer ${token}` } });
     if (response.data.success) {
       const decoded = parseJwt(token);
       currentUser.value = decoded.username || localStorage.getItem('ai_teacher_user') || '';
@@ -666,18 +765,16 @@ const verifyTokenAndLoad = async (token) => {
     localStorage.removeItem('ai_teacher_user');
     loadLocalHistoryData();
     startDateCheckTimer();
-    
     if (chatHistory.value.length === 0) {
       createNewChat(true);
     } else {
       const lastChat = chatHistory.value[0];
       currentChatId.value = lastChat.id;
-      messages.value = [...lastChat.messages];
+      messages.value = hydrateAttachments([...lastChat.messages]);
     }
   }
 };
 
-// 解析JWT令牌
 const parseJwt = (token) => {
   try {
     const base64Url = token.split('.')[1];
@@ -688,230 +785,23 @@ const parseJwt = (token) => {
   }
 };
 
-onUnmounted(() => {
-  stopDateCheckTimer();
-});
-
-// 全屏预览图片
-const previewImageFull = (imageUrl) => {
-  fullscreenImage.value = imageUrl;
-};
-
-// 关闭全屏预览
-const closeFullscreenImage = () => {
-  fullscreenImage.value = null;
-};
-
-// 显示错误消息
-const showError = (message) => {
-  errorMessage.value = message;
-  setTimeout(() => {
-    errorMessage.value = '';
-  }, 5000);
-};
-
-/**
- * 清理AI响应内容
- * 
- * 功能说明：
- * - 移除响应中可能包含的用户原始消息重复内容
- * - 移除各种格式的用户消息前缀（如"用户说："、"用户输入："等）
- * - 返回干净的AI回复内容
- * 
- * @param {string} response - AI返回的原始响应
- * @param {string} userMessage - 用户原始消息
- * @returns {string} - 清理后的响应内容
- */
-const cleanAIResponse = (response, userMessage) => {
-  let cleaned = response;
-  
-  if (userMessage && cleaned.startsWith(userMessage)) {
-    cleaned = cleaned.substring(userMessage.length).trim();
-  }
-  
-  const patterns = [
-    new RegExp(`^用户说：${userMessage}\\s*`, 'i'),
-    new RegExp(`^用户输入：${userMessage}\\s*`, 'i'),
-    new RegExp(`^用户：${userMessage}\\s*`, 'i'),
-    new RegExp(`^「${userMessage}」`, 'i'),
-  ];
-  
-  patterns.forEach(pattern => {
-    cleaned = cleaned.replace(pattern, '');
-  });
-  
-  return cleaned.trim();
-};
-
-// 选择作文体裁
-const selectEssayType = (type) => {
-  selectedEssayType.value = type;
-};
-
-/**
- * 处理发送消息
- * 
- * 功能说明：
- * - 判断用户输入是否为作文提交（根据文本长度和关键词）
- * - 如果是作文提交，检查是否选择了体裁
- * - 如果是咨询消息，直接发送无需选择体裁
- * - 添加用户消息到消息列表并显示加载状态
- * 
- * @param {Object} params - 发送参数
- * @param {string} params.content - 消息内容
- * @param {string} params.essayType - 作文体裁
- */
-const handleSend = async ({ content, essayType }) => {
-  const userMessage = content.trim();
-  const isEssay = isEssaySubmission(userMessage);
-  
-  // 如果是作文提交，必须选择体裁
-  if (isEssay && !essayType) {
-    showError('请先选择作文体裁（议论文、记叙文或说明文）');
-    return;
-  }
-  
-  messages.value.push({
-    role: 'user',
-    content: userMessage,
-    type: isEssay ? 'essay_submission' : 'normal',
-    essayType: isEssay ? essayType : null,
-    timestamp: Date.now()
-  });
-  
-  // 在AI回复消息位置添加加载状态占位
-  messages.value.push({
-    role: 'assistant',
-    content: '',
-    type: 'loading',
-    status: 'loading',
-    timestamp: Date.now()
-  });
-  
-  try {
-    const requestData = {
-      message: userMessage,
-      type: isEssay ? 'essay_review' : 'consultation'
-    };
-    
-    if (isEssay && essayType) {
-      requestData.essay_type = essayType;
-    }
-    
-    const response = await axios.post('/chat', requestData);
-    
-    if (response.data.success) {
-      const data = response.data.data;
-      const isEssayReview = data.score !== null || data.dimensions?.length > 0;
-      const cleanedResponse = cleanAIResponse(data.raw_response || '', userMessage);
-      
-      // 替换加载状态消息为实际响应
-      const loadingIndex = messages.value.findIndex(msg => msg.status === 'loading');
-      if (loadingIndex !== -1) {
-        if (isEssayReview) {
-          messages.value[loadingIndex] = {
-            role: 'assistant',
-            content: cleanedResponse,
-            type: 'essay_review',
-            timestamp: Date.now(),
-            data: {
-              score: data.score,
-              totalScore: data.total_score || 50,
-              essayType: data.essay_type || detectEssayType(userMessage),
-              dimensions: data.dimensions || [],
-              overallComment: data.overall_comment || '',
-              improvements: data.improvements || [],
-              summary: data.summary || null,
-              rawResponse: data.raw_response || ''
-            }
-          };
-        } else {
-          messages.value[loadingIndex] = {
-            role: 'assistant',
-            content: cleanedResponse,
-            type: 'normal',
-            timestamp: Date.now(),
-            data: null
-          };
-        }
-      }
-      
-      saveCurrentChat();
-    } else {
-      showError(response.data.message || '处理请求失败');
-      // 替换加载状态消息为错误消息
-      const loadingIndex = messages.value.findIndex(msg => msg.status === 'loading');
-      if (loadingIndex !== -1) {
-        messages.value[loadingIndex] = {
-          role: 'assistant',
-          content: '抱歉，处理请求时出现错误，请稍后重试。',
-          type: 'normal',
-          timestamp: Date.now()
-        };
-      }
-    }
-  } catch (error) {
-    console.error('API调用失败:', error);
-    const errorMsg = error.response?.data?.message || '网络连接失败，请检查后端服务是否启动';
-    showError(errorMsg);
-    
-    // 替换加载状态消息为错误消息
-    const loadingIndex = messages.value.findIndex(msg => msg.status === 'loading');
-    if (loadingIndex !== -1) {
-      messages.value[loadingIndex] = {
-        role: 'assistant',
-        content: '抱歉，处理请求时出现错误，请稍后重试。',
-        type: 'normal',
-        timestamp: Date.now()
-      };
-    }
-  } finally {
-    isLoading.value = false;
-  }
-};
-
-// 处理文件上传
-const handleFileUpload = ({ file, type, data }) => {
-  if (type === 'image') {
-    messages.value.push({
-      role: 'user',
-      content: '',
-      type: 'image',
-      image: data,
-      timestamp: Date.now()
-    });
-  } else if (type === 'text') {
-    // 文件内容已通过InputArea处理
-  }
-};
-
-/**
- * 检测作文类型
- * 
- * 检测逻辑：
- * 1. 首先检查文本中是否包含明确的体裁标识（议论文、记叙文、说明文）
- * 2. 然后根据内容特征词判断：论点/论证/论据 → 议论文；记叙/叙事/描写 → 记叙文；说明/解释/介绍 → 说明文
- * 3. 如果都不匹配，默认返回"初中作文"
- * 
- * @param {string} text - 作文文本内容
- * @returns {string} - 作文类型（议论文/记叙文/说明文/初中作文）
- */
-const detectEssayType = (text) => {
-  if (text.includes('议论文')) return '议论文';
-  if (text.includes('记叙文')) return '记叙文';
-  if (text.includes('说明文')) return '说明文';
-  
-  if (text.includes('论点') || text.includes('论证') || text.includes('论据')) {
-    return '议论文';
-  }
-  if (text.includes('记叙') || text.includes('叙事') || text.includes('描写')) {
-    return '记叙文';
-  }
-  if (text.includes('说明') || text.includes('解释') || text.includes('介绍')) {
-    return '说明文';
-  }
-  
-  return '初中作文';
-};
+const previewImageFull = (imageUrl) => { fullscreenImage.value = imageUrl; };
+const closeFullscreenImage = () => { fullscreenImage.value = null; };
 </script>
 
+<style scoped>
+/* 批改页需要占满剩余空间，且自身管理滚动 */
+.main-content > :deep(.review-workbench) { flex: 1; min-height: 0; }
+
+/* 批改结果页不显示侧边栏时，主内容区占满并去掉左侧留白 */
+.main-page.reviewing { overflow: hidden; }
+.main-page.reviewing .main-content { padding-left: 0; padding-top: 0; }
+
+.history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.history-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
