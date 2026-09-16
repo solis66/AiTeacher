@@ -1,0 +1,49 @@
+collection_name: agent
+persist_directory: chroma_db
+k: 3
+data_path: data
+md5_hex_store: md5.text
+allowed_knowledge_file_type: ["txt"]
+
+chunk_size: 200
+chunk_overlap: 20
+separators:  ["\n\n", "\n", ".", "!", "?", "。", "！", "？", " ", ""]
+
+# ---------------------------------------------------------------------------
+# 咨询检索（学生 / 老师与 AI 的问答）配置
+#
+# 与上方「批改」配置分开的原因：批改用的 collection 装的是权威评分标准（短条目、
+# 权威依据），咨询检索装的是教研语料与**学生历次批改结果**（长文本、教学案例）。
+# 混在一个 collection 里，k 小的时候语义空间会被评分标准片段挤满，检索形同虚设。
+# 切片参数也必须分开：评分标准是 200 字的短条目，教研材料是 400 字上下的方法论。
+# ---------------------------------------------------------------------------
+consult:
+  # 静态教研知识库（data/knowledge/**/*.md）
+  knowledge_collection: consult_knowledge
+  knowledge_path: data/knowledge
+  knowledge_chunk_size: 400
+  knowledge_chunk_overlap: 50
+  knowledge_md5_store: md5_knowledge.text
+  # 语料总字数低于该值时不做向量检索，直接全文注入 prompt。
+  # 依据：语料规模小时向量检索是负收益——有漏检、有延迟、要调 4 个参数，
+  # 而全量注入零漏检、零延迟、完全可控。超过该值再切到检索（见 knowledge_loader）。
+  full_inject_limit: 12000
+
+  # 批改案例库（review_cases：由 reviews.sqlite3 的 done 记录构建）
+  case_collection: review_cases
+  index_state: review_index_state.json
+  case_max_reviews: 500          # 单个索引批次最多处理的记录数
+
+  # 检索参数
+  k_knowledge: 4                 # 教研资料召回条数
+  k_cases: 6                     # 批改案例召回条数
+  score_threshold: 0.20          # 相似度阈值：低于该值的片段直接丢弃
+  # ↑ 该值经实测标定（qwen3.7-text-embedding + chroma 默认 l2 距离）：
+  #     无关问题「今天天气怎么样」  最高分 0.147  → 应被过滤
+  #     主题相关「结构问题」        最高分 0.256  → 应被保留
+  #     高度相关「错别字和标点」    最高分 0.567
+  #   取 0.20 落在「无关 / 相关」之间。注意：该阈值与 embedding 模型的距离尺度绑定，
+  #   更换向量模型后必须重新标定。
+  #   咨询场景与批改场景最重要的差别：批改不能拒答（必须给分），咨询必须能拒答。
+  #   低分片段塞给模型会诱导它强行引用，产生幻觉且表述更自信。
+  timeout: 8                     # 单次检索超时（秒），超时降级为「无参考资料」
