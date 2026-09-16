@@ -43,6 +43,7 @@ from utils.standard_loader import load_unified_standard
 from utils.text_classifier import classify_text, is_essay_submission as classifier_is_essay, detect_essay_type as classifier_detect_type
 from services.consultation_service import answer_consultation
 from services import consult_context
+from services import user_service
 from utils.chat_memory import normalize_history
 from utils.logger_handler import logger
 from utils.request_helpers import (
@@ -128,17 +129,20 @@ def validate_system_config():
     return True
 
 
-# 用户数据（模拟数据库）
-USERS = {
-    'admin': hashlib.sha256('123456'.encode()).hexdigest()
-}
-
 # 历史记录存储目录
 HISTORY_DIR = os.path.join(os.path.dirname(__file__), 'history')
 
 # 日志目录
 LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
+
+# 初始化 PostgreSQL 用户表并写入初始测试账号（幂等）。
+# 数据库不可用时仅记录错误，不阻塞服务启动；注册/登录接口会据此返回明确的 5xx。
+try:
+    user_service.init_users_table()
+except Exception as e:
+    print(f"⚠️  用户表初始化失败（注册/登录将不可用）：{e}")
+    logger.warning(f"用户表初始化失败: {e}")
 
 
 def log_api_request(func):
@@ -1383,37 +1387,88 @@ def chat():
         return json_error('服务器内部错误', '处理请求时出现错误，请稍后重试', status=500)
 
 
+@app.route('/register', methods=['POST'])
+def register():
+    """
+    用户注册接口
+    校验手机号/密码/确认密码，写入 PostgreSQL 用户表，返回注册结果
+    （注册成功后由前端引导回到登录页登录）
+
+    请求体: {"account": "11位手机号", "password": "xxx", "confirm_password": "xxx"}
+    返回: {"success": true, "message": "注册成功，请登录", "account": "手机号"}
+    """
+    data = get_json_body()
+    if data is None:
+        if not request.is_json:
+            return json_error('请求格式错误', '请使用JSON格式提交请求')
+        return json_error('请求数据格式错误', '请求体必须是JSON对象')
+
+    # 兼容 username 字段名（前端亦可沿用 username 提交手机号）
+    account = (data.get('account') or data.get('username') or '').strip()
+    password = data.get('password') or ''
+    confirm = data.get('confirm_password') or data.get('confirmPassword') or ''
+
+    # 校验手机号：11 位纯数字
+    if not re.fullmatch(user_service.PHONE_PATTERN, account):
+        return json_error('手机号格式错误', '请输入11位手机号码')
+
+    # 校验密码：长度 ≥ 6，且仅允许可见 ASCII 字符（字母/数字/特殊符号，无空格/中文/控制符）
+    if not password or len(password) < 6:
+        return json_error('密码格式错误', '密码长度不能少于6位')
+    if re.search(r'[^\x21-\x7E]', password):
+        return json_error('密码格式错误', '密码仅支持字母、数字与可见符号')
+
+    # 校验确认密码一致
+    if password != confirm:
+        return json_error('两次密码不一致', '两次输入的密码不一致')
+
+    try:
+        user_service.create_user(account, password)
+    except user_service.DuplicateAccountError:
+        return json_error('手机号已注册', '该手机号已注册，请直接登录')
+    except user_service.DatabaseUnavailableError:
+        return json_error('数据库不可用', '数据库连接失败，请稍后重试', status=503)
+
+    logger.info("[注册] 新用户注册成功: %s", account)
+    return json_ok('注册成功，请登录', account=account)
+
+
 @app.route('/login', methods=['POST'])
 def login():
     """
     用户登录接口
-    验证用户名密码，返回JWT令牌
-    
-    请求体: {"username": "admin", "password": "123456"}
-    返回: {"success": true, "token": "xxx", "username": "admin"}
+    从 PostgreSQL 用户表读取账号，用 bcrypt 校验密码，返回JWT令牌
+
+    请求体: {"username": "13727575721", "password": "123456"}
+    返回: {"success": true, "token": "xxx", "username": "13727575721"}
     """
-    data = request.json
-    username = data.get('username')
-    password = data.get('password')
-    
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'success': False, 'error': '请输入用户名和密码'}), 400
+
+    username = (data.get('username') or data.get('account') or '').strip()
+    password = data.get('password') or ''
+
     if not username or not password:
         return jsonify({'success': False, 'error': '请输入用户名和密码'}), 400
-    
-    hashed_password = hashlib.sha256(password.encode()).hexdigest()
-    
-    if username in USERS and USERS[username] == hashed_password:
-        token = jwt.encode({
-            'username': username,
-            'exp': datetime.utcnow() + timedelta(hours=24)
-        }, app.config['SECRET_KEY'])
-        
-        return jsonify({
-            'success': True,
-            'token': token,
-            'username': username
-        })
-    
-    return jsonify({'success': False, 'error': '用户名或密码错误'}), 401
+
+    try:
+        user = user_service.get_user_by_account(username)
+        if user and user_service.verify_password(user, password):
+            token = jwt.encode({
+                'username': user['account'],
+                'exp': datetime.utcnow() + timedelta(hours=24)
+            }, app.config['SECRET_KEY'])
+
+            return jsonify({
+                'success': True,
+                'token': token,
+                'username': user['account']
+            })
+        return jsonify({'success': False, 'error': '用户名或密码错误'}), 401
+    except user_service.DatabaseUnavailableError:
+        logger.error("[登录] 数据库不可用")
+        return jsonify({'success': False, 'error': '数据库不可用，请稍后重试'}), 503
 
 
 def get_user_history_path(username):
@@ -1722,9 +1777,12 @@ agent = ReactAgent()
 
 
 if __name__ == '__main__':
-    # 启动前验证配置
+    # 生产模式：debug 默认关闭；本地调试可设 FLASK_DEBUG=1 开启。
+    # 端口优先取环境变量 PORT（Render 等平台注入），本地默认 8501。
+    debug = os.environ.get('FLASK_DEBUG', '') == '1'
+    port = int(os.environ.get('PORT', '8501'))
     if validate_system_config():
-        app.run(host='0.0.0.0', port=8501, debug=True)
+        app.run(host='0.0.0.0', port=port, debug=debug)
     else:
         print("\n❌ 配置验证失败，服务启动终止")
         exit(1)

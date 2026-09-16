@@ -29,6 +29,9 @@ flask-cors==6.0.2
 # ---- 认证与配置 ----
 PyJWT==2.12.1
 PyYAML==6.0.3
+# ---- 用户注册/登录（PostgreSQL + bcrypt 密码哈希）----
+psycopg2-binary==2.9.13   # PostgreSQL 驱动
+bcrypt==5.0.0             # 密码加盐哈希（自带盐，无需独立 salt 字段）
 
 # ---- LLM / Agent / RAG（langchain 1.x 全家桶，必须锁版本）----
 langchain==1.2.11

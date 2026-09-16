@@ -18,18 +18,19 @@
         <p class="app-subtitle">专业的初中作文批改助手</p>
       </div>
 
-      <!-- 登录表单 -->
+      <!-- 登录/注册表单 -->
       <form class="login-form" @submit.prevent="handleSubmit">
-        <!-- 用户名输入框 -->
+        <!-- 账号（登录=用户名 / 注册=手机号）输入框 -->
         <div class="form-group">
-          <label class="form-label">用户名</label>
+          <label class="form-label">{{ mode === 'register' ? '手机号' : '用户名' }}</label>
           <div class="input-wrapper">
             <span class="input-icon">👤</span>
             <input
               type="text"
               v-model="form.username"
               class="form-input"
-              placeholder="请输入用户名"
+              :placeholder="mode === 'register' ? '请输入11位手机号码' : '请输入用户名'"
+              :maxlength="mode === 'register' ? 11 : undefined"
               autocomplete="username"
               @blur="validateUsername"
             />
@@ -48,7 +49,7 @@
               v-model="form.password"
               class="form-input"
               placeholder="请输入密码"
-              autocomplete="current-password"
+              :autocomplete="mode === 'register' ? 'new-password' : 'current-password'"
               @blur="validatePassword"
               @keydown.enter="handleSubmit"
             />
@@ -65,14 +66,33 @@
           <span v-if="errors.password" class="error-text">{{ errors.password }}</span>
         </div>
 
-        <!-- 登录按钮 -->
+        <!-- 确认密码输入框（仅注册时显示） -->
+        <div v-if="mode === 'register'" class="form-group">
+          <label class="form-label">确认密码</label>
+          <div class="input-wrapper">
+            <span class="input-icon">🔓</span>
+            <input
+              :type="showPassword ? 'text' : 'password'"
+              v-model="form.confirmPassword"
+              class="form-input"
+              placeholder="请再次输入密码"
+              autocomplete="new-password"
+              @blur="validateConfirmPassword"
+              @keydown.enter="handleSubmit"
+            />
+          </div>
+          <span v-if="errors.confirmPassword" class="error-text">{{ errors.confirmPassword }}</span>
+        </div>
+
+        <!-- 登录 / 注册按钮 -->
         <button
           type="submit"
           class="login-button"
           :disabled="isLoading || !isFormValid"
         >
           <span v-if="isLoading" class="loading-spinner"></span>
-          {{ isLoading ? '登录中...' : '登 录' }}
+          <template v-if="!isLoading">{{ mode === 'register' ? '注 册' : '登 录' }}</template>
+          <template v-else>{{ mode === 'register' ? '注册中...' : '登录中...' }}</template>
         </button>
 
         <!-- 登录错误提示 -->
@@ -81,10 +101,28 @@
           <span>{{ loginError }}</span>
         </div>
 
-        <!-- 测试账号提示 -->
-        <div class="hint-box">
+        <!-- 登录/注册成功提示 -->
+        <div v-if="successMessage" class="success-alert">
+          <span class="alert-icon">✅</span>
+          <span>{{ successMessage }}</span>
+        </div>
+
+        <!-- 模式切换 -->
+        <div class="mode-switch">
+          <span v-if="mode === 'login'">
+            还没有账号？
+            <button type="button" class="link-button" @click="switchMode('register')">立即注册</button>
+          </span>
+          <span v-else>
+            已有账号？
+            <button type="button" class="link-button" @click="switchMode('login')">返回登录</button>
+          </span>
+        </div>
+
+        <!-- 测试账号提示（仅登录时显示） -->
+        <div v-if="mode === 'login'" class="hint-box">
           <p class="hint-text">测试账号：</p>
-          <p class="hint-detail">用户名：admin</p>
+          <p class="hint-detail">手机号：13727575721</p>
           <p class="hint-detail">密码：123456</p>
         </div>
       </form>
@@ -100,13 +138,14 @@
 <script setup>
 /**
  * 登录页面组件
- * 负责用户身份验证，包含用户名密码输入、表单验证、密码显示切换等功能
+ * 负责用户身份验证，包含用户名密码输入、表单验证、密码显示切换等功能，
+ * 并支持切换到注册模式（手机号+密码+确认密码）完成新用户注册。
  * 
  * 核心功能：
- * 1. 表单验证（用户名非空、密码长度检查）
- * 2. 密码可见性切换
- * 3. JWT令牌获取与本地存储
- * 4. 登录状态管理与错误处理
+ * 1. 登录：用户名（手机号）+ 密码，成功后保存 JWT 触发登录成功事件
+ * 2. 注册：手机号 + 密码 + 确认密码，成功后回到登录页并预填手机号
+ * 3. 表单验证（手机号格式、密码长度为6位、两次密码一致）
+ * 4. 密码可见性切换
  */
 import { ref, computed, reactive } from 'vue';
 import request from '../api/request.js';
@@ -115,20 +154,29 @@ import { setToken, setUser } from '../utils/auth.js';
 // 定义组件事件：登录成功时触发
 const emit = defineEmits(['login-success']);
 
+/** 登录模式 / 注册模式 */
+const mode = ref('login');
+
+/** 注册成功回到登录页时的提示 */
+const successMessage = ref('');
+
 /**
  * 表单数据对象
- * 存储用户输入的用户名和密码
+ * - username: 登录=用户名，注册=手机号（账户号码）
+ * - password: 密码
+ * - confirmPassword: 确认密码（仅注册）
  */
 const form = reactive({
   username: '',
-  password: ''
+  password: '',
+  confirmPassword: ''
 });
 
 /**
  * 状态管理变量
- * - isLoading: 登录请求加载状态
+ * - isLoading: 请求加载状态
  * - showPassword: 密码是否显示（true=显示，false=隐藏）
- * - loginError: 登录错误信息
+ * - loginError: 提交错误信息
  * - errors: 表单字段验证错误
  */
 const isLoading = ref(false);
@@ -136,16 +184,36 @@ const showPassword = ref(false);
 const loginError = ref('');
 const errors = reactive({
   username: '',
-  password: ''
+  password: '',
+  confirmPassword: ''
 });
 
 /**
- * 验证用户名输入
- * 检查用户名是否为空
+ * 切换登录/注册模式
+ * 切换时清空错误提示与表单，避免残留上个模式的状态
+ */
+const switchMode = (target) => {
+  mode.value = target;
+  loginError.value = '';
+  successMessage.value = '';
+  form.username = '';
+  form.password = '';
+  form.confirmPassword = '';
+  errors.username = '';
+  errors.password = '';
+  errors.confirmPassword = '';
+};
+
+/**
+ * 验证账号输入
+ * 登录模式：非空即可；注册模式：必须是 11 位纯数字手机号
  */
 const validateUsername = () => {
-  if (!form.username.trim()) {
-    errors.username = '请输入用户名';
+  const value = form.username.trim();
+  if (!value) {
+    errors.username = mode.value === 'register' ? '请输入手机号' : '请输入用户名';
+  } else if (mode.value === 'register' && !/^1\d{10}$/.test(value)) {
+    errors.username = '请输入11位手机号码';
   } else {
     errors.username = '';
   }
@@ -166,39 +234,78 @@ const validatePassword = () => {
 };
 
 /**
- * 计算属性：表单是否有效
- * 要求用户名和密码都非空，且没有验证错误
+ * 验证确认密码（注册模式）
+ * 需与密码完全一致
  */
-const isFormValid = computed(() => {
-  return form.username.trim() && form.password.trim() && !errors.username && !errors.password;
-});
+const validateConfirmPassword = () => {
+  if (!form.confirmPassword) {
+    errors.confirmPassword = '请再次输入密码';
+  } else if (form.confirmPassword !== form.password) {
+    errors.confirmPassword = '两次输入的密码不一致';
+  } else {
+    errors.confirmPassword = '';
+  }
+};
 
 /**
- * 切换密码可见性
- * 切换showPassword状态，实现密码显示/隐藏功能
+ * 计算属性：表单是否有效
+ * 登录模式要求账号密码有效；注册模式额外要求确认密码一致
  */
+const isFormValid = computed(() => {
+  const base = form.username.trim() && form.password.trim() &&
+    !errors.username && !errors.password;
+  if (mode.value === 'register') {
+    return base && form.confirmPassword && !errors.confirmPassword;
+  }
+  return base;
+});
+
+/** 切换密码可见性 */
 const togglePasswordVisibility = () => {
   showPassword.value = !showPassword.value;
 };
 
 /**
- * 处理表单提交（登录请求）
- * 执行流程：
- * 1. 清除之前的错误信息
- * 2. 执行表单验证
- * 3. 如果表单无效，直接返回
- * 4. 发送登录请求到后端API
- * 5. 成功：保存token并触发登录成功事件
- * 6. 失败：显示错误信息
+ * 提交注册请求
+ * 校验通过后调用 POST /register，成功后切回登录模式并预填手机号
+ */
+const handleRegister = async () => {
+  const response = await request.post('/register', {
+    account: form.username.trim(),
+    password: form.password.trim(),
+    confirm_password: form.confirmPassword.trim()
+  });
+
+  if (response.data.success) {
+    // 注册成功回登录页，携带提示并预填手机号
+    successMessage.value = '注册成功，请登录';
+    mode.value = 'login';
+    form.password = '';
+    form.confirmPassword = '';
+    // 保留已注册的手机号，方便用户直接登录
+    errors.password = '';
+    errors.confirmPassword = '';
+    return;
+  }
+  // 注册失败，显示后端错误（如手机号已注册、格式错误）
+  loginError.value = response.data.error || response.data.message || '注册失败，请稍后重试';
+};
+
+/**
+ * 处理表单提交（登录或注册）
+ * 根据当前模式分发到登录/注册流程
  */
 const handleSubmit = async () => {
   // 清除之前的错误信息
   loginError.value = '';
-  
+
   // 执行表单验证
   validateUsername();
   validatePassword();
-  
+  if (mode.value === 'register') {
+    validateConfirmPassword();
+  }
+
   // 如果表单验证失败，不发送请求
   if (!isFormValid.value) {
     return;
@@ -208,6 +315,11 @@ const handleSubmit = async () => {
   isLoading.value = true;
 
   try {
+    if (mode.value === 'register') {
+      await handleRegister();
+      return;
+    }
+
     // 发送登录请求到后端
     // 后端接口路径: POST /login
     // 请求体: { username: string, password: string }
@@ -222,7 +334,7 @@ const handleSubmit = async () => {
       // 保存JWT令牌与用户名到本地存储，用于后续API请求认证与数据归属
       setToken(response.data.token);
       setUser(response.data.username);
-      
+
       // 触发登录成功事件，通知父组件跳转主页面
       emit('login-success', {
         username: response.data.username,
@@ -234,18 +346,18 @@ const handleSubmit = async () => {
     }
   } catch (error) {
     // 捕获网络错误或服务器错误
-    console.error('登录请求失败:', error);
-    
+    console.error('请求失败:', error);
+
     // 根据错误类型显示不同的错误信息
     if (error.response) {
       // 服务器返回错误（如404、500等）
-      loginError.value = error.response.data?.error || `登录失败，服务器错误: ${error.response.status}`;
+      loginError.value = error.response.data?.error || `请求失败，服务器错误: ${error.response.status}`;
     } else if (error.request) {
       // 请求已发送但无响应（网络问题）
-      loginError.value = '登录失败，请检查网络连接';
+      loginError.value = '请求失败，请检查网络连接';
     } else {
       // 请求配置错误
-      loginError.value = `登录失败: ${error.message}`;
+      loginError.value = `请求失败: ${error.message}`;
     }
   } finally {
     // 无论成功或失败，都结束加载状态
@@ -467,8 +579,40 @@ const handleSubmit = async () => {
   font-size: 14px;
 }
 
+.success-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #e8f5e9;
+  border-radius: 8px;
+  color: #2e7d32;
+  font-size: 14px;
+}
+
 .alert-icon {
   font-size: 16px;
+}
+
+/* 登录/注册模式切换 */
+.mode-switch {
+  text-align: center;
+  font-size: 14px;
+  color: #888;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 14px;
+  color: #667eea;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.link-button:hover {
+  text-decoration: underline;
 }
 
 /* 登录按钮 */

@@ -1,0 +1,36 @@
+# Render Blueprint —— 用 Render 面板「New → Blueprint」导入本文件即可一键起服务
+# 需提前在 Render 项目环境变量/此处配置 DASHSCOPE_API_KEY 与数据库。
+
+services:
+  - type: web
+    name: ai-teacher-api
+    runtime: docker
+    repo: https://github.com/solis66/AiTeacher.git
+    plan: free            # 免费版：15分钟无请求休眠；正式用可改 starter
+    # 构建上下文为仓库根，Dockerfile 内以 backend/ 为前缀拷贝代码
+    dockerContext: .
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      # 端口：Render 会自动注入，也可显式指定
+      - key: PORT
+        value: 8501
+      # AI 模型密钥（必填，否则启动校验失败）
+      - key: DASHSCOPE_API_KEY
+        sync: false        # 在面板里手动填写，不写进仓库
+      # Supabase（Session pooler）
+      - key: PG_HOST
+        value: aws-0-ap-southeast-1.pooler.supabase.com
+      - key: PG_PORT
+        value: 5432
+      - key: PG_DB
+        value: postgres
+      - key: PG_USER
+        value: postgres.ufwfyhamsiftpqqbtnma
+      - key: PG_PASSWORD
+        sync: false        # 在面板里手动填写（记得用重置后的新密码）
+      # 阿里云 OCR（如用到）
+      - key: ALIBABA_CLOUD_ACCESS_KEY_ID
+        sync: false
+      - key: ALIBABA_CLOUD_ACCESS_KEY_SECRET
+        sync: false

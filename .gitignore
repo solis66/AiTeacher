@@ -5,6 +5,11 @@ __pycache__/
 .venv/
 venv/
 
+# 环境变量（含数据库口令等敏感信息，禁止入库）
+.env
+backend/.env
+**/.env
+
 # Node / 前端构建产物
 node_modules/
 dist/
