@@ -1,0 +1,33 @@
+# AiTeachers 阿里云一键编排：backend(Flask) + frontend(Nginx)
+# 用法（服务器上）：docker compose up -d --build
+# 环境变量从仓库根目录的 .env 读取（.env 已被 .gitignore 排除，不入库）
+
+services:
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      # 生产模式：关闭 debug，端口 8501（Dockerfile 内 EXPOSE 8501）
+      - PORT=8501
+      - FLASK_DEBUG=0
+    # 依赖 chromadb/onnxruntime，启动较慢；给足健康检查超时
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8501/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    # 对外只暴露 Nginx 的 80（HTTP）。HTTPS 可后续用 acme.sh/certbot 或经 CNAME 的云 CDN 证书补。
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
