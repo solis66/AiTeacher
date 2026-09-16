@@ -54,6 +54,7 @@
 
 import { FileText, PanelLeftClose } from 'lucide-vue-next';
 import { reviewPageUrl } from '../../utils/reviewUrl.js';
+import { formatRecordTime as formatTime } from '../../utils/format.js';
 
 const props = defineProps({
   items: { type: Array, default: () => [] },
@@ -82,14 +83,6 @@ const statusClass = (status) => ({
   done: 'ui-badge--done',
   failed: 'ui-badge--failed'
 }[status] || 'ui-badge--muted');
-
-const formatTime = (iso) => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
 </script>
 
 <style scoped>

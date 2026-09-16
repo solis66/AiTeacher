@@ -93,24 +93,32 @@ class Settings:
     def _load_from_file(self):
         """
         从YAML配置文件加载配置
+
+        路径基准说明：
+            统一使用 utils.path_tool.get_abs_path 解析（基准为 backend/ 目录），
+            与工程其他模块保持一致；不依赖启动时的工作目录（cwd），
+            无论从仓库根还是 backend/ 内启动，配置定位行为都相同。
         """
+        from utils.path_tool import get_abs_path
+
         config_files = [
             'config/config.yaml',
             'config/config.local.yaml',
             'config.yaml',
             'config.local.yaml'
         ]
-        
+
         for config_file in config_files:
-            if os.path.exists(config_file):
+            config_path = get_abs_path(config_file)
+            if os.path.exists(config_path):
                 try:
-                    with open(config_file, 'r', encoding='utf-8') as f:
+                    with open(config_path, 'r', encoding='utf-8') as f:
                         file_config = yaml.safe_load(f)
                         if file_config:
                             self._deep_merge(self._config, file_config)
-                            logger.info(f"已加载配置文件: {config_file}")
+                            logger.info(f"已加载配置文件: {config_path}")
                 except Exception as e:
-                    logger.warning(f"加载配置文件失败 {config_file}: {str(e)}")
+                    logger.warning(f"加载配置文件失败 {config_path}: {str(e)}")
     
     def _load_from_env(self):
         """

@@ -8,16 +8,18 @@
  *   因此这里把当前用户拼成 owner 查询参数，后端页面图片接口会读它。
  */
 
+import { getUser } from './auth.js';
+
 /** 拼接页面图片地址，带 owner 参数，供 <img> 直接使用 */
 export function reviewPageUrl(reviewId, file, username) {
   if (!reviewId || !file) return '';
   return `/api/review/${reviewId}/page/${file}?owner=${encodeURIComponent(username || 'anonymous')}`;
 }
 
-/** 当前登录用户（与请求头 X-Username 保持同一来源：登录时写入的 ai_teacher_user） */
+/** 当前登录用户（与请求头 X-Username 保持同一来源，见 utils/auth.js） */
 export function currentOwnerName() {
   try {
-    return localStorage.getItem('ai_teacher_user') || 'anonymous';
+    return getUser() || 'anonymous';
   } catch (e) {
     return 'anonymous';
   }

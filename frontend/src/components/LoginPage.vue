@@ -109,14 +109,8 @@
  * 4. 登录状态管理与错误处理
  */
 import { ref, computed, reactive } from 'vue';
-import axios from 'axios';
-
-/**
- * 后端API基础地址配置
- * 根据环境动态调整，前端调用需与后端接口路径一致
- * 后端登录接口路径: /login
- */
-const API_BASE_URL = '/';
+import request from '../api/request.js';
+import { setToken, setUser } from '../utils/auth.js';
 
 // 定义组件事件：登录成功时触发
 const emit = defineEmits(['login-success']);
@@ -218,16 +212,16 @@ const handleSubmit = async () => {
     // 后端接口路径: POST /login
     // 请求体: { username: string, password: string }
     // 返回: { success: boolean, token?: string, username?: string, error?: string }
-    const response = await axios.post(`${API_BASE_URL}login`, {
+    const response = await request.post('/login', {
       username: form.username.trim(),
       password: form.password.trim()
     });
 
     // 处理登录响应
     if (response.data.success) {
-      // 保存JWT令牌到本地存储，用于后续API请求认证
-      localStorage.setItem('ai_teacher_token', response.data.token);
-      localStorage.setItem('ai_teacher_user', response.data.username);
+      // 保存JWT令牌与用户名到本地存储，用于后续API请求认证与数据归属
+      setToken(response.data.token);
+      setUser(response.data.username);
       
       // 触发登录成功事件，通知父组件跳转主页面
       emit('login-success', {

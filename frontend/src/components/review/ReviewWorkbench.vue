@@ -210,7 +210,7 @@
  */
 
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
-import axios from 'axios';
+import request from '../../api/request.js';
 import {
   ArrowLeft, PanelLeftOpen, PanelRightOpen, FileDown, Save,
   Pen, Eraser, Undo2, Redo2,
@@ -297,7 +297,7 @@ const notify = (message) => {
 const fetchList = async () => {
   listLoading.value = true;
   try {
-    const res = await axios.get('/api/review/list', { headers: ownerHeader() });
+    const res = await request.get('/api/review/list', { headers: ownerHeader() });
     if (res.data.success) items.value = res.data.data;
   } catch (e) {
     notify('批改列表加载失败');
@@ -310,7 +310,7 @@ const loadReview = async (id) => {
   if (!id) return;
   loading.value = true;
   try {
-    const res = await axios.get(`/api/review/${id}`, { headers: ownerHeader() });
+    const res = await request.get(`/api/review/${id}`, { headers: ownerHeader() });
     if (res.data.success) {
       record.value = res.data.data;
       // 保证手工批注字段存在，避免子组件判空
@@ -386,7 +386,7 @@ const downloadCurrentPage = () => {
   const page = record.value?.pages?.[pageIndex.value];
   if (!page) return;
   // 通过 fetch + blob 下载，保证带上下载文件名
-  axios.get(`/api/review/${record.value.id}/page/${page.file}`, {
+  request.get(`/api/review/${record.value.id}/page/${page.file}`, {
     headers: ownerHeader(), responseType: 'blob'
   }).then((res) => {
     const url = URL.createObjectURL(res.data);
@@ -407,7 +407,7 @@ const exportAs = async (format) => {
     return;
   }
   try {
-    const res = await axios.get(`/api/review/${record.value.id}/export`, {
+    const res = await request.get(`/api/review/${record.value.id}/export`, {
       headers: ownerHeader(), params: { format }, responseType: 'blob'
     });
     const url = URL.createObjectURL(res.data);
@@ -429,7 +429,7 @@ const save = async () => {
   saving.value = true;
   try {
     const r = record.value.result;
-    const res = await axios.post(`/api/review/${record.value.id}/save`, {
+    const res = await request.post(`/api/review/${record.value.id}/save`, {
       version: record.value.version,
       score: r.score,
       rating: r.rating,
@@ -463,7 +463,7 @@ const save = async () => {
 
 const retry = async () => {
   try {
-    await axios.post(`/api/review/${record.value.id}/retry`, {}, { headers: ownerHeader() });
+    await request.post(`/api/review/${record.value.id}/retry`, {}, { headers: ownerHeader() });
     await loadReview(record.value.id);
     startPolling();
   } catch (e) {
@@ -478,7 +478,7 @@ const startPolling = () => {
   pollTimer = setInterval(async () => {
     if (!record.value) return;
     try {
-      const res = await axios.get(`/api/review/${record.value.id}`, { headers: ownerHeader() });
+      const res = await request.get(`/api/review/${record.value.id}`, { headers: ownerHeader() });
       if (res.data.success && res.data.data.status !== record.value.status) {
         const keepMarks = record.value.marks;
         record.value = { ...res.data.data, marks: res.data.data.marks?.length ? res.data.data.marks : keepMarks || [] };

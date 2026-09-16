@@ -128,6 +128,7 @@
 import { ref, watch, nextTick } from 'vue';
 import { FileText, ChevronRight, Loader2, AlertCircle, RefreshCw } from 'lucide-vue-next';
 import { reviewPageUrl } from '../utils/reviewUrl.js';
+import { formatChatTime as formatTime } from '../utils/format.js';
 
 const props = defineProps({
   messages: { type: Array, default: () => [] },
@@ -149,12 +150,6 @@ const entryThumb = (msg) => {
   if (!msg || !msg.reviewId) return '';
   const file = msg.thumb || 'page-1.jpg';
   return reviewPageUrl(msg.reviewId, file, props.username);
-};
-
-const formatTime = (timestamp) => {
-  if (!timestamp) return '';
-  const date = new Date(timestamp);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 };
 
 const previewImage = (url) => emit('preview-image', url);

@@ -110,7 +110,8 @@
  */
 
 import { ref, onMounted, onUnmounted, computed } from 'vue';
-import axios from 'axios';
+import request from '../api/request.js';
+import { getToken, getUser, clearAuth, parseJwt } from '../utils/auth.js';
 import ChatHistory from './ChatHistory.vue';
 import InputArea from './InputArea.vue';
 import ReviewWorkbench from './review/ReviewWorkbench.vue';
@@ -144,7 +145,6 @@ let lastCheckedDate = '';
 const pollTimers = new Map();   // reviewId -> timer，避免组件销毁后继续轮询
 
 const STORAGE_KEY = 'ai_teacher_chat_history';
-const TOKEN_KEY = 'ai_teacher_token';
 const MAX_HISTORY = 100;
 const MAX_HISTORY_DAYS = 7;
 const POLL_INTERVAL = 2500;     // 批改状态轮询间隔（毫秒）
@@ -187,8 +187,6 @@ const historyLabel = (chat) => {
 };
 
 // ---------------- 通用工具 ----------------
-const getToken = () => localStorage.getItem(TOKEN_KEY);
-
 const showError = (message) => {
   errorMessage.value = message;
   setTimeout(() => { errorMessage.value = ''; }, 5000);
@@ -289,9 +287,8 @@ const submitReview = async ({ userMsg, userMessage, grade, title, requirements, 
     // 按用户在输入区排好的顺序追加附件
     (attachments || []).forEach((att) => formData.append('files', att.file, att.name));
 
-    const response = await axios.post('/api/review', formData, {
-      headers: { 'X-Username': currentUser.value || 'anonymous' }
-    });
+    // X-Username 由 request.js 请求拦截器统一注入（数据归属标识）
+    const response = await request.post('/api/review', formData);
 
     if (!response.data.success) {
       replaceMessage(pendingMessage, {
@@ -328,9 +325,7 @@ const startPolling = (reviewId, message) => {
   stopPolling(reviewId);
   const tick = async () => {
     try {
-      const response = await axios.get(`/api/review/${reviewId}`, {
-        headers: { 'X-Username': currentUser.value || 'anonymous' }
-      });
+      const response = await request.get(`/api/review/${reviewId}`);
       if (!response.data.success) return;
       const data = response.data.data;
 
@@ -389,9 +384,7 @@ const retryReview = async (reviewId) => {
   const message = messages.value.find((m) => m.reviewId === reviewId && m.type === 'review_failed');
   if (!message) return;
   try {
-    await axios.post(`/api/review/${reviewId}/retry`, {}, {
-      headers: { 'X-Username': currentUser.value || 'anonymous' }
-    });
+    await request.post(`/api/review/${reviewId}/retry`);
     replaceMessage(message, {
       role: 'assistant',
       type: 'review_pending',
@@ -432,16 +425,15 @@ const sendConsultation = async (userMessage) => {
   const pending = { role: 'assistant', content: '', type: 'loading', status: 'loading', timestamp: Date.now() };
   messages.value.push(pending);
   try {
-    // X-Username 必须带上：后端用 request.headers.get('X-Username') 归属数据，
-    // 缺失时全部落到 'anonymous'，记忆和日志都无法按人区分（此前这个请求就漏了）。
-    const response = await axios.post(
+    // X-Username 由 request.js 请求拦截器统一注入：后端用它归属数据，
+    // 缺失时全部落到 'anonymous'，记忆和日志都无法按人区分。
+    const response = await request.post(
       '/chat',
       {
         message: userMessage,
         type: 'consultation',
         history: buildConsultationHistory(userMessage)
-      },
-      { headers: { 'X-Username': currentUser.value || 'anonymous' } }
+      }
     );
     if (response.data.success) {
       const data = response.data.data;
@@ -495,16 +487,15 @@ const backToChat = () => {
 const selectGrade = (grade) => { selectedGrade.value = grade; };
 
 const handleLogout = () => {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem('ai_teacher_user');
+  clearAuth();
   emit('logout');
 };
 
 const loadHistoryFromServer = async () => {
-  const token = getToken();
-  if (!token) return;
+  if (!getToken()) return;
   try {
-    const response = await axios.get('/get_history', { headers: { Authorization: `Bearer ${token}` } });
+    // Authorization 由 request.js 请求拦截器统一注入
+    const response = await request.get('/get_history');
     if (response.data.success) {
       const mergedHistory = mergeHistory(response.data.history, loadLocalHistory());
       chatHistory.value = mergedHistory
@@ -527,15 +518,13 @@ const loadHistoryFromServer = async () => {
 };
 
 const syncHistory = async () => {
-  const token = getToken();
-  if (!token) return;
+  if (!getToken()) return;
   isSyncing.value = true;
   try {
     const historyToSync = chatHistory.value.map((chat) => ({
       id: chat.id, date: chat.date, messages: chat.messages
     }));
-    const response = await axios.post('/save_history', { history: historyToSync },
-      { headers: { Authorization: `Bearer ${token}` } });
+    const response = await request.post('/save_history', { history: historyToSync });
     showError(response.data.success ? '历史记录同步成功' : '同步失败');
   } catch (error) {
     showError('同步失败，请检查网络连接');
@@ -756,7 +745,7 @@ const saveHistory = () => {
 
 // ---------------- 生命周期 ----------------
 onMounted(() => {
-  currentUser.value = localStorage.getItem('ai_teacher_user') || '';
+  currentUser.value = getUser();
   const token = getToken();
   if (token) {
     verifyTokenAndLoad(token);
@@ -781,19 +770,18 @@ onUnmounted(() => {
 
 const verifyTokenAndLoad = async (token) => {
   try {
-    const response = await axios.get('/get_history', { headers: { Authorization: `Bearer ${token}` } });
+    // Authorization 由 request.js 请求拦截器统一注入
+    const response = await request.get('/get_history');
     if (response.data.success) {
       const decoded = parseJwt(token);
-      currentUser.value = decoded.username || localStorage.getItem('ai_teacher_user') || '';
+      currentUser.value = decoded.username || getUser() || '';
       await loadHistoryFromServer();
       startDateCheckTimer();
     } else {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem('ai_teacher_user');
+      clearAuth();
     }
   } catch (error) {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem('ai_teacher_user');
+    clearAuth();
     loadLocalHistoryData();
     startDateCheckTimer();
     if (chatHistory.value.length === 0) {
@@ -803,16 +791,6 @@ const verifyTokenAndLoad = async (token) => {
       currentChatId.value = lastChat.id;
       messages.value = hydrateAttachments([...lastChat.messages]);
     }
-  }
-};
-
-const parseJwt = (token) => {
-  try {
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(atob(base64));
-  } catch (e) {
-    return {};
   }
 };
 

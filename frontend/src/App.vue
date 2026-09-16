@@ -18,14 +18,14 @@
 import { ref, onMounted } from 'vue';
 import LoginPage from './components/LoginPage.vue';
 import MainPage from './components/MainPage.vue';
+import { getToken, clearAuth } from './utils/auth.js';
 
 // 登录状态
 const isLoggedIn = ref(false);
 
-// 检查本地存储中是否有token
+/** 检查本地存储中是否有 token，有则直接进入主页面 */
 const checkAuthStatus = () => {
-  const token = localStorage.getItem('ai_teacher_token');
-  isLoggedIn.value = !!token;
+  isLoggedIn.value = !!getToken();
 };
 
 // 处理登录成功
@@ -34,10 +34,9 @@ const handleLoginSuccess = (userInfo) => {
   isLoggedIn.value = true;
 };
 
-// 处理登出
+/** 处理登出：清除本地登录态并回到登录页 */
 const handleLogout = () => {
-  localStorage.removeItem('ai_teacher_token');
-  localStorage.removeItem('ai_teacher_user');
+  clearAuth();
   isLoggedIn.value = false;
 };
 

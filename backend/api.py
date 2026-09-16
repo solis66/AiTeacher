@@ -44,6 +44,16 @@ from utils.text_classifier import classify_text, is_essay_submission as classifi
 from services.consultation_service import answer_consultation
 from services import consult_context
 from utils.chat_memory import normalize_history
+from utils.logger_handler import logger
+from utils.request_helpers import (
+    SUPPORTED_ESSAY_TYPES,
+    call_with_retry,
+    get_json_body,
+    get_request_username,
+    json_error,
+    json_ok,
+    validate_essay_type,
+)
 # 批改工作台路由（上传/分页识别/AI批改/保存/导出）
 from routes.review import review_bp
 import traceback
@@ -131,46 +141,6 @@ LOG_DIR = os.path.join(os.path.dirname(__file__), 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 
 
-def retry_on_failure(max_retries=3, delay=1.0, backoff=2.0):
-    """
-    重试装饰器：在函数失败时自动重试
-    适用于网络请求、外部API调用等可能临时失败的场景
-    
-    参数：
-        max_retries: int - 最大重试次数
-        delay: float - 初始重试延迟（秒）
-        backoff: float - 延迟倍增因子
-    """
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            retries = 0
-            current_delay = delay
-            
-            while retries < max_retries:
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    retries += 1
-                    error_msg = str(e)
-                    print(f"[重试机制] 第 {retries}/{max_retries} 次尝试失败: {error_msg}")
-                    
-                    if retries < max_retries:
-                        # 添加随机抖动，避免重试风暴
-                        jitter = random.uniform(0, current_delay * 0.1)
-                        sleep_time = current_delay + jitter
-                        print(f"[重试机制] 等待 {sleep_time:.2f} 秒后重试...")
-                        time.sleep(sleep_time)
-                        current_delay *= backoff
-                    else:
-                        print(f"[重试机制] 已达到最大重试次数 {max_retries}，放弃重试")
-                        raise
-        
-            return func(*args, **kwargs)
-        return wrapper
-    return decorator
-
-
 def log_api_request(func):
     """
     API请求日志装饰器
@@ -213,8 +183,8 @@ def log_api_request(func):
             except Exception as e:
                 log_entry['request_parse_error'] = str(e)
         
-        print(f"[API请求] {log_entry}")
-        
+        logger.info(f"[API请求] {log_entry}")
+
         try:
             # 执行实际的API处理
             response = func(*args, **kwargs)
@@ -231,8 +201,8 @@ def log_api_request(func):
             else:
                 log_entry['status_code'] = 200
             
-            print(f"[API响应] {log_entry}")
-            
+            logger.info(f"[API响应] {log_entry}")
+
             return response
             
         except Exception as e:
@@ -242,7 +212,7 @@ def log_api_request(func):
             log_entry['duration_ms'] = int((time.time() - start_time) * 1000)
             log_entry['traceback'] = traceback.format_exc()
             
-            print(f"[API错误] {log_entry}")
+            logger.error(f"[API错误] {log_entry}")
             raise
     
     return wrapper
@@ -298,7 +268,7 @@ def load_essay_criteria():
         for essay_type in criteria.keys():
             criteria[essay_type] = unified
     except Exception as e:
-        print(f"加载统一评分标准失败: {e}")
+        logger.error(f"加载统一评分标准失败: {e}")
 
     return criteria
 
@@ -501,15 +471,15 @@ def is_essay_submission(text):
         boolean - 是否为作文提交
     """
     if not text or not isinstance(text, str):
-        print("[作文检测] 输入为空或非字符串类型")
+        logger.debug("[作文检测] 输入为空或非字符串类型")
         return False
-    
+
     trimmed_text = text.strip()
     text_length = len(trimmed_text)
-    
+
     # 1. 最小长度检查：至少100字才可能是作文
     if text_length < 100:
-        print(f"[作文检测] 文本过短({text_length}字)，不是作文提交")
+        logger.debug(f"[作文检测] 文本过短({text_length}字)，不是作文提交")
         return False
     
     essay_keywords = ['作文', '文章', '写作', 'essay', '作文题', '请批改', '请点评',
@@ -526,35 +496,35 @@ def is_essay_submission(text):
     # 2. 长文本优先判定：超过500字且包含作文关键词，直接判定为作文
     #    即使包含咨询关键词也优先考虑是作文（用户可能在作文中提问）
     if text_length > 500 and has_essay:
-        print(f"[作文检测] 长文本({text_length}字)且包含作文关键词，判定为作文提交")
+        logger.debug(f"[作文检测] 长文本({text_length}字)且包含作文关键词，判定为作文提交")
         return True
-    
+
     # 3. 超长文本（超过800字）直接判定为作文，无需关键词
     if text_length > 800:
-        print(f"[作文检测] 超长文本({text_length}字)，直接判定为作文提交")
+        logger.debug(f"[作文检测] 超长文本({text_length}字)，直接判定为作文提交")
         return True
-    
+
     # 4. 咨询类问题排除（仅适用于短文本）
     if has_consult and not has_essay and text_length < 300:
-        print(f"[作文检测] 短文本({text_length}字)且包含咨询关键词，不是作文提交")
+        logger.debug(f"[作文检测] 短文本({text_length}字)且包含咨询关键词，不是作文提交")
         return False
 
     # 5. 如果包含作文关键词且文本较长，判定为作文提交
     if has_essay and is_long:
-        print(f"[作文检测] 包含作文关键词且文本较长({text_length}字)，判定为作文提交")
+        logger.debug(f"[作文检测] 包含作文关键词且文本较长({text_length}字)，判定为作文提交")
         return True
 
     # 6. 纯长文本（超过500字）也判定为作文提交
     if text_length > 500:
-        print(f"[作文检测] 文本超过500字({text_length}字)，判定为作文提交")
+        logger.debug(f"[作文检测] 文本超过500字({text_length}字)，判定为作文提交")
         return True
 
-    # 5. 中等长度文本（200-500字）需要包含作文关键词才判定为作文
+    # 7. 中等长度文本（200-500字）需要包含作文关键词才判定为作文
     if is_long and has_essay:
-        print("[作文检测] 中等长度文本且包含作文关键词，判定为作文提交")
+        logger.debug("[作文检测] 中等长度文本且包含作文关键词，判定为作文提交")
         return True
 
-    print("[作文检测] 未满足作文提交条件")
+    logger.debug("[作文检测] 未满足作文提交条件")
     return False
 
 
@@ -577,7 +547,7 @@ def extract_json_from_response(response_text):
         try:
             return json.loads(json_str)
         except json.JSONDecodeError as e:
-            print(f"JSON解析失败: {e}")
+            logger.warning(f"JSON解析失败: {e}")
 
     brace_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
     match2 = re.search(brace_pattern, response_text, re.DOTALL)
@@ -605,7 +575,7 @@ def parse_json_feedback(json_data, essay_type):
         dict|None - 解析后的结构化数据
     """
     if not isinstance(json_data, dict):
-        print(f"JSON数据类型错误，期望dict，得到 {type(json_data)}")
+        logger.warning(f"JSON数据类型错误，期望dict，得到 {type(json_data)}")
         return None
 
     result = {
@@ -677,7 +647,7 @@ def parse_json_feedback(json_data, essay_type):
                         result['improvements'].append(line)
 
     except Exception as e:
-        print(f"解析JSON数据时发生错误: {e}")
+        logger.error(f"解析JSON数据时发生错误: {e}")
         return None
 
     return result
@@ -909,7 +879,7 @@ def parse_essay_feedback(response_text, essay_type):
             parsed = validate_and_fix_score(parsed)
             return parsed
         else:
-            print("JSON解析成功但数据不完整，尝试文本解析")
+            logger.info("JSON解析成功但数据不完整，尝试文本解析")
 
     parsed = parse_text_feedback(response_text, essay_type)
     parsed['raw_response'] = response_text
@@ -954,7 +924,7 @@ def validate_and_fix_score(parsed_result):
     for dim_name, score in dimension_scores.items():
         if normalized_scores.get(dim_name, score) != score:
             has_dimension_fixes = True
-            print(f"[维度分数修正] 体裁: {essay_type}, 维度: {dim_name}, 原始分数: {score}, 修正后: {normalized_scores[dim_name]}")
+            logger.warning(f"[维度分数修正] 体裁: {essay_type}, 维度: {dim_name}, 原始分数: {score}, 修正后: {normalized_scores[dim_name]}")
     
     # 使用计算器修正总分
     fixed_score, was_fixed = calculator.fix_total_score(normalized_scores, original_score)
@@ -975,9 +945,9 @@ def validate_and_fix_score(parsed_result):
     if was_fixed or has_dimension_fixes:
         parsed_result['score_fixed'] = True
         if was_fixed:
-            print(f"[总分校验] 体裁: {essay_type}, 检测到总分({original_score})与各项评分之和({parsed_result['calculated_total']})不一致，已自动修正为: {fixed_score}")
+            logger.warning(f"[总分校验] 体裁: {essay_type}, 检测到总分({original_score})与各项评分之和({parsed_result['calculated_total']})不一致，已自动修正为: {fixed_score}")
     else:
-        print(f"[总分校验] 体裁: {essay_type}, 总分校验通过: {fixed_score}")
+        logger.info(f"[总分校验] 体裁: {essay_type}, 总分校验通过: {fixed_score}")
     
     # 添加校验信息
     parsed_result['validation'] = {
@@ -1000,8 +970,6 @@ def generate_essay_review(essay_content, essay_type):
     返回：
         string - AI生成的批改结果
     """
-    SUPPORTED_ESSAY_TYPES = ['议论文', '记叙文', '说明文']
-    
     try:
         # 步骤1：验证作文内容
         if not essay_content or not essay_content.strip():
@@ -1021,54 +989,28 @@ def generate_essay_review(essay_content, essay_type):
                 raise ValueError(f"不支持的作文类型：{essay_type}，请选择议论文、记叙文或说明文")
         
         # 步骤3：记录日志
-        print(f"[作文批改] 开始处理作文，用户选择体裁: {essay_type or '未指定(将自动检测)'}，字数: {content_length}")
+        logger.info(f"[作文批改] 开始处理作文，用户选择体裁: {essay_type or '未指定(将自动检测)'}，字数: {content_length}")
         
         # 步骤4：调用RAG服务生成批改结果
         response = rag_summarize.invoke({"query": essay_content, "essay_type": essay_type})
         
         # 步骤5：验证返回结果
         if not response or not response.strip():
-            print("[作文批改] AI返回空结果")
+            logger.warning("[作文批改] AI返回空结果")
             return "抱歉，生成作文批改失败，请稍后重试。"
-        
-        print(f"[作文批改] 成功生成批改结果，长度: {len(response)}")
+
+        logger.info(f"[作文批改] 成功生成批改结果，长度: {len(response)}")
         return response
-        
+
     except ValueError as e:
-        print(f"[作文批改] 输入验证失败: {str(e)}")
+        logger.warning(f"[作文批改] 输入验证失败: {str(e)}")
         raise Exception(f"输入错误：{str(e)}")
     except KeyError as e:
-        print(f"[作文批改] 提示词模板变量错误: {str(e)}")
+        logger.error(f"[作文批改] 提示词模板变量错误: {str(e)}")
         raise Exception("系统配置错误，请联系管理员")
     except Exception as e:
-        print(f"[作文批改] 生成失败: {str(e)}")
-        print(traceback.format_exc())
-        raise Exception("AI服务暂时不可用，请稍后重试")
-
-
-def chat_with_agent(message):
-    """
-    与AI助手进行普通对话
-    用于非作文批改的咨询类问题
-    
-    参数：
-        message: string - 用户输入的消息
-        
-    返回：
-        string - AI的回复
-    """
-    try:
-        response = ''
-        for chunk in agent.execute_stream(message):
-            if chunk:
-                response += chunk
-        return response if response else "抱歉，生成回复失败，请稍后重试。"
-    except ValueError as e:
-        print(f"配置错误: {str(e)}")
-        raise Exception(f"配置错误: {str(e)}")
-    except Exception as e:
-        print(f"对话失败: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"[作文批改] 生成失败: {str(e)}")
+        logger.error(traceback.format_exc())
         raise Exception("AI服务暂时不可用，请稍后重试")
 
 
@@ -1194,100 +1136,51 @@ def consult_essay_teacher(user_message):
     # 尝试确保Agent已就绪（支持延迟初始化）
     try:
         agent._ensure_agent_ready()
-        print("[咨询老师] Agent初始化成功")
+        logger.info("[咨询老师] Agent初始化成功")
     except Exception as e:
-        print(f"[咨询老师] Agent初始化失败: {str(e)}")
+        logger.error(f"[咨询老师] Agent初始化失败: {str(e)}")
         raise Exception("AI服务未就绪，请联系管理员检查配置")
-    
+
     # 构建专业咨询提示词
     prompt = create_consultation_prompt(user_message)
-    print(f"[咨询老师] 构建专业咨询提示词，检测到主题: {user_message[:50]}...")
-    
+    logger.info(f"[咨询老师] 构建专业咨询提示词，检测到主题: {user_message[:50]}...")
+
     try:
         response = ''
         chunk_count = 0
-        
-        print(f"[咨询老师] 开始接收流式响应...")
-        
+
+        logger.info("[咨询老师] 开始接收流式响应...")
+
         for chunk in agent.execute_stream(prompt):
             chunk_count += 1
             if chunk:
                 response += chunk
-                print(f"[咨询老师] 收到第{chunk_count}个响应块，累计长度: {len(response)}")
-        
+                logger.debug(f"[咨询老师] 收到第{chunk_count}个响应块，累计长度: {len(response)}")
+
         response = response.strip()
-        print(f"[咨询老师] 流式响应接收完成，最终长度: {len(response)}")
-        
+        logger.info(f"[咨询老师] 流式响应接收完成，最终长度: {len(response)}")
+
         # 如果回复过长，进行适当截断（保留核心内容）
         if len(response) > 5000:
             response = response[:5000] + '\n\n（内容较长，已自动精简）'
-        
+
         # 检查返回结果是否为空
         if not response:
-            print("[咨询老师] AI返回内容为空")
+            logger.warning("[咨询老师] AI返回内容为空")
             return "抱歉，暂时无法回答这个问题，请稍后重试。"
-        
+
         return response
-        
+
     except ValueError as e:
-        print(f"[咨询老师] 配置错误: {str(e)}")
+        logger.error(f"[咨询老师] 配置错误: {str(e)}")
         raise Exception(f"配置错误: {str(e)}")
     except EnvironmentError as e:
-        print(f"[咨询老师] 环境配置错误: {str(e)}")
+        logger.error(f"[咨询老师] 环境配置错误: {str(e)}")
         raise Exception("AI服务配置错误，请联系管理员")
     except Exception as e:
-        print(f"[咨询老师] 咨询失败: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"[咨询老师] 咨询失败: {str(e)}")
+        logger.error(traceback.format_exc())
         raise Exception("AI咨询服务暂时不可用，请稍后重试")
-
-
-@retry_on_failure(max_retries=3, delay=2.0, backoff=2.0)
-def consult_essay_teacher_with_retry(user_message):
-    """
-    带重试机制的咨询老师对话函数
-    当AI服务临时不可用时自动重试
-    
-    参数：
-        user_message: string - 用户咨询问题
-        
-    返回：
-        string - AI老师的专业回复
-    """
-    print("[重试机制] 调用咨询老师服务")
-    return consult_essay_teacher(user_message)
-
-
-@retry_on_failure(max_retries=3, delay=2.0, backoff=2.0)
-def generate_essay_review_with_retry(essay_content, essay_type):
-    """
-    带重试机制的作文批改生成函数
-    当AI服务临时不可用时自动重试
-    
-    参数：
-        essay_content: string - 作文内容
-        essay_type: string - 作文类型
-        
-    返回：
-        string - AI生成的批改结果
-    """
-    print(f"[重试机制] 调用作文批改服务，体裁: {essay_type}")
-    return generate_essay_review(essay_content, essay_type)
-
-
-@retry_on_failure(max_retries=3, delay=2.0, backoff=2.0)
-def chat_with_agent_with_retry(message):
-    """
-    带重试机制的对话函数
-    当AI服务临时不可用时自动重试
-    
-    参数：
-        message: string - 用户消息
-        
-    返回：
-        string - AI回复
-    """
-    print("[重试机制] 调用对话服务")
-    return chat_with_agent(message)
 
 
 def log_user_input(username, message, essay_type=None, is_essay=False):
@@ -1311,7 +1204,7 @@ def log_user_input(username, message, essay_type=None, is_essay=False):
         'source': request.remote_addr if request else 'unknown'
     }
     
-    print(f"[用户输入日志] {log_entry['timestamp']} | 用户: {log_entry['username']} | 类型: {'作文-' + essay_type if essay_type else ('作文(自动识别)' if is_essay else '普通消息')} | 长度: {log_entry['message_length']}")
+    logger.info(f"[用户输入日志] {log_entry['timestamp']} | 用户: {log_entry['username']} | 类型: {'作文-' + essay_type if essay_type else ('作文(自动识别)' if is_essay else '普通消息')} | 长度: {log_entry['message_length']}")
     
     log_dir = os.path.join(os.path.dirname(__file__), 'logs')
     os.makedirs(log_dir, exist_ok=True)
@@ -1321,7 +1214,7 @@ def log_user_input(username, message, essay_type=None, is_essay=False):
         with open(log_file, 'a', encoding='utf-8') as f:
             f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
     except Exception as e:
-        print(f"写入用户日志失败: {str(e)}")
+        logger.error(f"写入用户日志失败: {str(e)}")
 
 
 @app.route('/chat', methods=['POST'])
@@ -1334,24 +1227,13 @@ def chat():
     请求体: {"message": "用户输入的文本", "essay_type": "作文类型（可选）"}
     返回: {"success": true, "data": {...}, "raw_response": "..."}
     """
-    # 数据验证
-    if not request.is_json:
-        return jsonify({
-            'success': False,
-            'error': '请求格式错误',
-            'message': '请使用JSON格式提交请求'
-        }), 400
-    
-    data = request.json
-    
-    # 验证请求数据结构
-    if not isinstance(data, dict):
-        return jsonify({
-            'success': False,
-            'error': '请求数据格式错误',
-            'message': '请求体必须是JSON对象'
-        }), 400
-    
+    # 数据验证：请求体必须是 JSON 对象
+    data = get_json_body()
+    if data is None:
+        if not request.is_json:
+            return json_error('请求格式错误', '请使用JSON格式提交请求')
+        return json_error('请求数据格式错误', '请求体必须是JSON对象')
+
     message = data.get('message', '')
     user_selected_essay_type = data.get('essay_type', '')
     # 对话记忆：前端传来的本会话最近轮次。
@@ -1367,39 +1249,23 @@ def chat():
     student_hint = (data.get('student') or '').strip()[:40]
 
     # 获取当前用户（从请求头或会话中）
-    current_user = request.headers.get('X-Username', 'anonymous')
+    current_user = get_request_username()
 
     # 验证消息内容
     if not message or not isinstance(message, str):
-        return jsonify({
-            'success': False,
-            'error': '请输入内容',
-            'message': '请输入作文内容或咨询问题'
-        }), 400
-    
+        return json_error('请输入内容', '请输入作文内容或咨询问题')
+
     # 验证消息长度
     message_length = len(message.strip())
     if message_length < MIN_CONTENT_LENGTH:
-        return jsonify({
-            'success': False,
-            'error': '内容过短',
-            'message': f'输入内容至少需要{MIN_CONTENT_LENGTH}个字符'
-        }), 400
-    
+        return json_error('内容过短', f'输入内容至少需要{MIN_CONTENT_LENGTH}个字符')
+
     if message_length > MAX_CONTENT_LENGTH:
-        return jsonify({
-            'success': False,
-            'error': '内容过长',
-            'message': f'输入内容不能超过{MAX_CONTENT_LENGTH}个字符'
-        }), 400
-    
+        return json_error('内容过长', f'输入内容不能超过{MAX_CONTENT_LENGTH}个字符')
+
     # 验证作文类型（如果提供）
-    if user_selected_essay_type and user_selected_essay_type not in ['议论文', '记叙文', '说明文']:
-        return jsonify({
-            'success': False,
-            'error': '无效的作文类型',
-            'message': '作文类型只能是：议论文、记叙文或说明文'
-        }), 400
+    if user_selected_essay_type and not validate_essay_type(user_selected_essay_type):
+        return json_error('无效的作文类型', '作文类型只能是：议论文、记叙文或说明文')
 
     try:
         # 使用新的文本分类器判断文本类型
@@ -1411,18 +1277,21 @@ def chat():
         if text_type == 'essay':
             # 作文提交流程
             # 优先使用用户选择的体裁，如果未选择则使用分类器识别的体裁
-            if user_selected_essay_type and user_selected_essay_type in ['议论文', '记叙文', '说明文']:
+            if user_selected_essay_type and validate_essay_type(user_selected_essay_type):
                 essay_type = user_selected_essay_type
-                print(f"使用用户选择的体裁: {essay_type}")
+                logger.info(f"使用用户选择的体裁: {essay_type}")
             elif detected_essay_type:
                 essay_type = detected_essay_type
-                print(f"自动识别体裁: {essay_type}")
+                logger.info(f"自动识别体裁: {essay_type}")
             else:
                 essay_type = '记叙文'
-                print("未检测到体裁，使用默认值: 记叙文")
-            
+                logger.info("未检测到体裁，使用默认值: 记叙文")
+
             # 调用RAG服务生成作文批改结果（带重试机制）
-            response = generate_essay_review_with_retry(message, essay_type)
+            response = call_with_retry(
+                lambda: generate_essay_review(message, essay_type),
+                '作文批改服务'
+            )
             
             # 解析AI返回的作文批改结果
             parsed = parse_essay_feedback(response, essay_type)
@@ -1458,8 +1327,11 @@ def chat():
                 }
             else:
                 # 咨询服务失败，降级到原有的咨询方式
-                print("[Chat] 咨询服务失败，降级到原有咨询方式")
-                response = consult_essay_teacher_with_retry(message)
+                logger.warning("[Chat] 咨询服务失败，降级到原有咨询方式")
+                response = call_with_retry(
+                    lambda: consult_essay_teacher(message),
+                    '作文咨询服务'
+                )
                 parsed = {
                     'score': None,
                     'dimensions': [],
@@ -1473,8 +1345,11 @@ def chat():
                 }
         else:
             # 未知类型，降级到原有的咨询方式
-            print(f"[Chat] 文本类型未知({text_type})，使用原有咨询方式")
-            response = consult_essay_teacher_with_retry(message)
+            logger.warning(f"[Chat] 文本类型未知({text_type})，使用原有咨询方式")
+            response = call_with_retry(
+                lambda: consult_essay_teacher(message),
+                '作文咨询服务'
+            )
             
             # 咨询类聊天直接返回响应，不进行作文解析
             parsed = {
@@ -1495,29 +1370,17 @@ def chat():
             'raw_response': response
         })
     except ValueError as e:
-        print(f"[Chat] 数据验证错误: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': '数据验证错误',
-            'message': f'数据验证失败: {str(e)}'
-        }), 400
+        logger.warning(f"[Chat] 数据验证错误: {str(e)}")
+        logger.warning(traceback.format_exc())
+        return json_error('数据验证错误', f'数据验证失败: {str(e)}')
     except ServiceUnavailableError as e:
-        print(f"[Chat] 服务不可用: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': '服务不可用',
-            'message': f'AI服务暂时不可用，请稍后重试: {str(e)}'
-        }), 503
+        logger.error(f"[Chat] 服务不可用: {str(e)}")
+        logger.error(traceback.format_exc())
+        return json_error('服务不可用', f'AI服务暂时不可用，请稍后重试: {str(e)}', status=503)
     except Exception as e:
-        print(f"[Chat] 处理请求时发生错误: {str(e)}")
-        print(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': '服务器内部错误',
-            'message': '处理请求时出现错误，请稍后重试'
-        }), 500
+        logger.error(f"[Chat] 处理请求时发生错误: {str(e)}")
+        logger.error(traceback.format_exc())
+        return json_error('服务器内部错误', '处理请求时出现错误，请稍后重试', status=500)
 
 
 @app.route('/login', methods=['POST'])
@@ -1582,7 +1445,7 @@ def load_user_history(username):
             with open(history_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"加载用户历史记录失败: {e}")
+            logger.error(f"加载用户历史记录失败: {e}")
     return []
 
 
@@ -1603,7 +1466,7 @@ def save_user_history(username, history):
             json.dump(history, f, ensure_ascii=False, indent=2)
         return True
     except Exception as e:
-        print(f"保存用户历史记录失败: {e}")
+        logger.error(f"保存用户历史记录失败: {e}")
         return False
 
 

@@ -18,6 +18,7 @@ chroma_db/
 md5.text
 md5_knowledge.text
 review_index_state.json
+.docs/
 
 # 批改运行数据（用户上传的作文图片、识别结果与 SQLite 库）
 **/data/reviews/
