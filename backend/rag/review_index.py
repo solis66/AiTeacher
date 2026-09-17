@@ -285,6 +285,10 @@ def build_metrics(record: Dict) -> Optional[Dict]:
         'student': student_of(record),
         'version': int(record.get('version') or 0),
         'created_at': (record.get('created_at') or '')[:10],
+        # created_at 被截断到「天」，同一天提交的多篇作文无法区分先后，
+        # 排序会退化成按 review id 比较——「最近一次得分」会随机取错。
+        # 因此额外保留一个完整时间戳**专供排序**，展示仍用 created_at。
+        'created_ts': (record.get('created_at') or '').strip(),
         'grade': (inp.get('grade') or '').strip(),
         'title': (inp.get('title') or '').strip(),
         'essay_type': (result.get('essay_type') or inp.get('essay_type') or '').strip(),
@@ -395,7 +399,10 @@ class ReviewIndex:
             if owner and (metric.get('owner') or '') != owner:
                 continue
             matched.append(metric)
-        matched.sort(key=lambda m: (m.get('created_at') or '', m.get('id') or ''))
+        # 排序优先用完整时间戳 created_ts；升级前的旧缓存没有该字段，回退到
+        # created_at（只到天），最后用 review id 兜底保证顺序稳定。
+        matched.sort(key=lambda m: (m.get('created_ts') or m.get('created_at') or '',
+                                    m.get('id') or ''))
         return matched
 
     # ------------------------------------------------------------------ 建索引
@@ -446,7 +453,10 @@ class ReviewIndex:
             state = self._load_state()
             changed = [rid for rid, ver in alive.items() if state.get(rid) != ver]
             stale = [rid for rid in state if rid not in alive]
-            if not changed and not stale:
+            # 升级前的旧指标缓存缺 created_ts：必须走一次回填，否则同一天多篇作文
+            # 永远按 id 排序。回填只在首次发生（补完即落盘），之后恢复快速路径。
+            needs_backfill = any('created_ts' not in m for m in self._metrics_cache.values())
+            if not changed and not stale and not needs_backfill:
                 return {'ok': True, 'added': 0, 'removed': 0, 'skipped': len(alive),
                         'reviews_done': len(self._metrics_cache), 'reviews_total': len(alive),
                         'reason': ''}
@@ -470,6 +480,13 @@ class ReviewIndex:
         # 2) 处理新增与变更
         for rid, version in alive.items():
             if not force and state.get(rid) == version and rid in metrics:
+                # 旧缓存缺 created_ts：只补这一个字段，**不碰向量库**——
+                # 重放整条记录会重新走 embedding，代价与收益不成比例。
+                if 'created_ts' not in metrics[rid]:
+                    record = self._read_record(rid)
+                    metric = build_metrics(record) if record else None
+                    if metric:
+                        metrics[rid] = metric
                 skipped += 1
                 continue
             record = self._read_record(rid)
