@@ -3,13 +3,15 @@
 
 ## 项目概述 | Project Overview
 
-AITeacher 是一个课程项目，主要面向中学生语文作文的 AI 作文批改工作台。系统采用 RAG（检索增强生成）技术，依据标准化评分标准自动完成作文初批——多维度评分、总体评价与改进建议一次生成；用户可以在批改工作台中对 AI 结果进行复核、修订与精批，把重复性劳动交给 AI，把精力留给因材施教。
+AITeacher 是一个由课程项目变成毕业设计的项目，主要面向中学生语文作文的 AI 作文批改工作台。系统采用 RAG（检索增强生成）技术，依据标准化评分标准自动完成作文初批——多维度评分、总体评价与改进建议一次生成；用户可以在批改工作台中对 AI 结果进行复核、修订与精批，把重复性劳动交给 AI，把精力留给因材施教。
 
 同时，系统内置 **AI 咨询助手**：基于教研知识库与历史批改学情的检索问答，帮助用户快速解答作文教学问题、了解写作薄弱点。
 
 
 ### 主要核心功能 | Core Features
+- **批改结果工作台**：
 
+- **AI咨询老师**
 
 
 ---
@@ -27,8 +29,6 @@ AITeacher 是一个课程项目，主要面向中学生语文作文的 AI 作文
 - **构建工具**: Vite 4.4+
 - **HTTP 客户端**: Axios（统一封装拦截器）
 - **样式**: CSS3
-
-### 
 
 ### 项目结构 | Project Structure
 
@@ -87,8 +87,8 @@ AiTeachers/
 #### 1. 克隆项目 | Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/AiTeachers.git
-cd AiTeachers
+git clone https://github.com/solis66/AiTeacher.git
+cd AiTeacher
 ```
 
 #### 2. 安装后端依赖 | Install Backend Dependencies
@@ -183,7 +183,7 @@ Contributions are welcome! Please follow these steps:
 For questions or suggestions, please contact:
 
 - 邮箱 | Email: 2093125624@qq.com
-- GitHub: solis66(https://github.com/solis66)
+- GitHub: [solis66](https://github.com/solis66)
 
 ---
 
