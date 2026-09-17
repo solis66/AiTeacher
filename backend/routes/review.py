@@ -26,7 +26,8 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_file
 
-from services.review_workbench import ReviewWorkbench
+from services.review_workbench import BATCH_MAX_ESSAYS, ReviewWorkbench
+from services.consult_context import get_index
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,54 @@ def create_review():
         return jsonify({'success': False, 'message': f'创建批改任务失败：{exc}'}), 500
 
 
+@review_bp.route('/api/review/batch', methods=['POST'])
+def create_batch():
+    """批量创建批改任务（需求 D2：批量 = N 条独立记录，前端按序聚合）。
+
+    multipart 约定：
+        essay_count      批次内作文篇数（1~BATCH_MAX_ESSAYS）
+        每篇一组字段：grade_{i} / essay_type_{i} / title_{i} /
+                     requirements_{i} / body_{i} / student_{i}
+        每篇附件：files_{i}（可多张，每篇 ≤ MAX_PAGES，全批合计 ≤ 6）
+    """
+    try:
+        owner = current_owner()
+        try:
+            count = int(request.form.get('essay_count') or '0')
+        except ValueError:
+            count = 0
+        if not 1 <= count <= BATCH_MAX_ESSAYS:
+            raise ValueError(f'一次最多同时批改{BATCH_MAX_ESSAYS}篇作文')
+
+        essays = []
+        for i in range(count):
+            uploads = []
+            for storage in request.files.getlist(f'files_{i}'):
+                if storage and storage.filename:
+                    uploads.append((storage.filename, storage.read()))
+            essays.append({
+                'grade': request.form.get(f'grade_{i}') or '',
+                'essay_type': request.form.get(f'essay_type_{i}') or '',
+                'title': request.form.get(f'title_{i}') or '',
+                'requirements': request.form.get(f'requirements_{i}') or '',
+                'body': request.form.get(f'body_{i}') or '',
+                'uploads': uploads,
+                'student': request.form.get(f'student_{i}') or '',
+            })
+
+        records = workbench.create_batch(owner, essays)
+        return jsonify({
+            'success': True,
+            'count': len(records),
+            'data': [summarize(r) for r in records],
+        })
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 400
+    except Exception as exc:
+        logger.error('创建批量批改任务失败: %s', exc, exc_info=True)
+        return jsonify({'success': False, 'message': f'创建批量批改任务失败：{exc}'}), 500
+
+
 @review_bp.route('/api/review/students', methods=['GET'])
 def list_students():
     """
@@ -131,6 +180,25 @@ def list_students():
     except Exception as exc:
         logger.error('查询学生名单失败: %s', exc, exc_info=True)
         return jsonify({'success': False, 'message': '查询学生名单失败'}), 500
+
+
+@review_bp.route('/api/review/profile', methods=['GET'])
+def review_profile():
+    """学情报告（需求用户界面：登录后查学情）。
+
+    ?student= 指定学生（老师代查）；缺省取 owner（提交者本人）。
+    数据由索引直接计算（不走模型/向量），按 owner 隔离。
+    """
+    try:
+        owner = current_owner()
+        student = (request.args.get('student') or '').strip()
+        if not student or student == owner:
+            student = owner
+        profile = get_index().student_profile(student, owner if student != owner else None)
+        return jsonify({'success': True, 'data': profile})
+    except Exception as exc:
+        logger.error('查询学情报告失败: %s', exc, exc_info=True)
+        return jsonify({'success': False, 'message': '查询学情报告失败'}), 500
 
 
 @review_bp.route('/api/review/list', methods=['GET'])
@@ -202,12 +270,12 @@ def retry_review(rid):
 
 @review_bp.route('/api/review/<rid>/export', methods=['GET'])
 def export_review(rid):
-    """导出已保存版本为 PDF。"""
+    """导出已保存版本为 Markdown / PDF（需求 D4：仅在批改结果页提供）。"""
     fmt = (request.args.get('format') or 'pdf').lower()
     if fmt != 'pdf':
         return jsonify({'success': False, 'message': '不支持的导出格式'}), 400
     try:
-        content, mimetype = workbench.export(rid, current_owner(), fmt)
+        content, mimetype, filename = workbench.export(rid, current_owner(), fmt)
     except ValueError as exc:
         return jsonify({'success': False, 'message': str(exc)}), 400
     except Exception as exc:
@@ -215,7 +283,7 @@ def export_review(rid):
         return jsonify({'success': False, 'message': f'导出失败：{exc}'}), 500
 
     return send_file(BytesIO(content), mimetype=mimetype, as_attachment=True,
-                     download_name=f'ai批改结果.{fmt}')
+                     download_name=filename)
 
 
 @review_bp.route('/api/review/<rid>', methods=['DELETE'])

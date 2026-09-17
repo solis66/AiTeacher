@@ -6,16 +6,6 @@
         <ArrowLeft :size="15" /><span>返回首页</span>
       </button>
 
-      <button
-        v-if="!railOpen"
-        type="button"
-        class="ui-icon-btn"
-        data-tip="作文列表"
-        @click="railOpen = true"
-      >
-        <PanelLeftOpen :size="16" />
-      </button>
-
       <div class="topbar-title">
         <span class="title-text">{{ record?.input?.title || '作文批改' }}</span>
         <span v-if="record" class="title-meta">
@@ -44,20 +34,8 @@
       </div>
     </header>
 
-    <!-- ==================== 三栏主体 ==================== -->
+    <!-- ==================== 主体 ==================== -->
     <div class="workbench-body">
-      <!-- 左栏：作文列表 -->
-      <ReviewRail
-        v-if="railOpen"
-        class="rail-slot"
-        :items="items"
-        :username="username"
-        :active-id="record?.id"
-        :loading="listLoading"
-        @select="loadReview"
-        @close="railOpen = false"
-      />
-
       <!-- 中栏：原文与批注 -->
       <div class="center-slot">
         <!-- 未完成/失败时给出明确状态，不展示空白或占位内容 -->
@@ -84,53 +62,12 @@
           :username="username"
           :zoom="zoom"
           :rotation="rotation"
-          :tool="tool"
-          :stroke-color="strokeColor"
-          :active-annotation="activeAnnotation"
-          @add-mark="addMark"
-          @erase-marks="eraseMarks"
-          @commit-marks="markDirty"
-          @select-annotation="activeAnnotation = $event"
           @zoom-delta="(d) => setZoom(zoom + d)"
           @set-zoom="zoom = $event"
         >
           <!-- 底部工具栏：通过插槽渲染在画布（舞台）正下方，宽度仅占画布区域 -->
           <template #toolbar>
             <footer class="ui-toolbar">
-              <!-- 工具组：仅保留涂写（画笔）与擦除（橡皮擦） -->
-              <button type="button" class="ui-icon-btn" :class="{ 'is-active': tool === 'pen' }" data-tip="画笔" @click="setTool('pen')">
-                <Pen :size="16" />
-              </button>
-              <button type="button" class="ui-icon-btn" :class="{ 'is-active': tool === 'eraser' }" data-tip="橡皮擦" @click="setTool('eraser')">
-                <Eraser :size="16" />
-              </button>
-
-              <!-- 画笔颜色：画笔工具下可选 -->
-              <div v-if="tool !== 'select'" class="tool-options">
-                <button
-                  v-for="c in colors"
-                  :key="c.value"
-                  type="button"
-                  class="color-dot"
-                  :class="{ 'is-active': strokeColor === c.value }"
-                  :style="{ background: c.value }"
-                  :data-tip="c.label"
-                  @click="strokeColor = c.value"
-                ></button>
-              </div>
-
-              <span class="ui-toolbar__divider"></span>
-
-              <!-- 撤销 / 恢复 -->
-              <button type="button" class="ui-icon-btn" data-tip="撤销" :disabled="!undoStack.length" @click="undo">
-                <Undo2 :size="16" />
-              </button>
-              <button type="button" class="ui-icon-btn" data-tip="恢复" :disabled="!redoStack.length" @click="redo">
-                <Redo2 :size="16" />
-              </button>
-
-              <span class="ui-toolbar__divider"></span>
-
               <!-- 缩放 / 旋转 -->
               <button type="button" class="ui-icon-btn" data-tip="缩小" @click="setZoom(zoom - 0.15)">
                 <ZoomOut :size="16" />
@@ -200,25 +137,25 @@
  * 作文批改工作台（独立批改结果页）
  *
  * 需求对应：
- * - 三栏结构：左栏约 200px 作文列表、中栏原文与批注自适应、右栏 360–400px 评价编辑
+ * - 两栏结构：中栏原文与批注自适应、右栏 360–400px 评价编辑
  * - 顶部操作栏固定（返回首页 / 导出 PDF / 保存修改）
  * - 各区域独立滚动
- * - 画布底栏工具：画笔（涂写）、橡皮擦（擦除）、颜色、撤销/恢复、缩放、旋转、翻页、当前页下载；
+ * - 画布底栏工具：缩放、旋转、重置、翻页、当前页下载（批注/涂画/撤销已移除）；
  *   工具栏渲染在画布（舞台）正下方，宽度仅占画布区域
- * - 窄屏：左右侧栏改为可收起面板，优先保留原文阅读空间
- * - 保存覆盖评分、评语、详细点评、润色稿与手工批注；导出使用已保存版本
+ * - 窄屏：右侧栏改为可收起面板，优先保留原文阅读空间
+ * - 保存覆盖评分、评语、详细点评、润色稿；导出使用已保存版本
+ * - 作文列表已上移到主页面全局侧边栏（「批改结果」导航项下方），
+ *   本组件通过 list 事件把列表与当前打开的记录回传给父组件
  */
 
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import request from '../../api/request.js';
 import {
-  ArrowLeft, PanelLeftOpen, PanelRightOpen, FileDown, Save,
-  Pen, Eraser, Undo2, Redo2,
+  ArrowLeft, PanelRightOpen, FileDown, Save,
   ZoomIn, ZoomOut, RotateCw, Maximize, ChevronLeft, ChevronRight, Download,
   Loader2, AlertCircle, RefreshCw
 } from 'lucide-vue-next';
 
-import ReviewRail from './ReviewRail.vue';
 import ReviewCanvas from './ReviewCanvas.vue';
 import ReviewPanel from './ReviewPanel.vue';
 import PolishDiff from './PolishDiff.vue';
@@ -228,7 +165,7 @@ const props = defineProps({
   username: { type: String, default: '' }
 });
 
-defineEmits(['back']);
+const emit = defineEmits(['back', 'list']);
 
 // ---------------- 数据状态 ----------------
 const items = ref([]);
@@ -243,26 +180,12 @@ const lastSavedAt = ref('');
 
 // ---------------- 视图状态 ----------------
 const isNarrow = ref(false);
-const railOpen = ref(true);
 const panelOpen = ref(false);
 const pageIndex = ref(0);
 const zoom = ref(1);
 const rotation = ref(0);
-const activeAnnotation = ref(null);
 const showDiff = ref(false);
 const toast = ref('');
-
-// ---------------- 批注工具状态 ----------------
-const tool = ref('select');
-const strokeColor = ref('#d93025');
-const undoStack = ref([]);
-const redoStack = ref([]);
-
-const colors = [
-  { value: '#d93025', label: '红色（纠错）' },
-  { value: '#188038', label: '绿色（标记）' },
-  { value: '#202124', label: '黑色（批注）' }
-];
 
 const ownerHeader = () => ({ 'X-Username': props.username || 'anonymous' });
 
@@ -294,8 +217,18 @@ const notify = (message) => {
 };
 
 // ---------------- 数据加载 ----------------
+/** 把作文列表与当前打开的记录同步给父组件（全局侧边栏「批改结果」子列表使用） */
+const syncList = () => {
+  emit('list', {
+    items: items.value,
+    activeId: record.value?.id || null,
+    loading: listLoading.value
+  });
+};
+
 const fetchList = async () => {
   listLoading.value = true;
+  syncList();
   try {
     const res = await request.get('/api/review/list', { headers: ownerHeader() });
     if (res.data.success) items.value = res.data.data;
@@ -303,6 +236,7 @@ const fetchList = async () => {
     notify('批改列表加载失败');
   } finally {
     listLoading.value = false;
+    syncList();
   }
 };
 
@@ -313,15 +247,12 @@ const loadReview = async (id) => {
     const res = await request.get(`/api/review/${id}`, { headers: ownerHeader() });
     if (res.data.success) {
       record.value = res.data.data;
-      // 保证手工批注字段存在，避免子组件判空
+      // 保证 marks 字段存在，兼容历史数据（前端已不再新增手工批注）
       if (!record.value.marks) record.value.marks = [];
       pageIndex.value = 0;
       rotation.value = 0;
       dirty.value = false;
-      undoStack.value = [];
-      redoStack.value = [];
-      activeAnnotation.value = null;
-      if (isNarrow.value) railOpen.value = false;
+      syncList();
     } else {
       notify(res.data.message || '记录加载失败');
     }
@@ -332,55 +263,15 @@ const loadReview = async (id) => {
   }
 };
 
-// ---------------- 手工批注与撤销/恢复 ----------------
-const uid = () => `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-
-/** 每次改动前压栈，保证撤销能回到修改之前的状态 */
-const pushHistory = () => {
-  undoStack.value.push(JSON.stringify(record.value?.marks || []));
-  if (undoStack.value.length > 50) undoStack.value.shift();
-  redoStack.value = [];
-};
-
-const addMark = (mark) => {
-  if (!record.value) return;
-  pushHistory();
-  record.value.marks.push({ id: uid(), ...mark });
-  markDirty();
-};
-
-const eraseMarks = (ids) => {
-  if (!record.value || !ids?.length) return;
-  pushHistory();
-  record.value.marks = record.value.marks.filter((m) => !ids.includes(m.id));
-  markDirty();
-};
-
-const undo = () => {
-  if (!undoStack.value.length || !record.value) return;
-  redoStack.value.push(JSON.stringify(record.value.marks));
-  record.value.marks = JSON.parse(undoStack.value.pop());
-  markDirty();
-};
-
-const redo = () => {
-  if (!redoStack.value.length || !record.value) return;
-  undoStack.value.push(JSON.stringify(record.value.marks));
-  record.value.marks = JSON.parse(redoStack.value.pop());
-  markDirty();
-};
-
-const markDirty = () => { dirty.value = true; };
-
 // ---------------- 视图操作 ----------------
-const setTool = (name) => {
-  tool.value = tool.value === name ? 'select' : name;
-};
 const setZoom = (value) => {
   zoom.value = Math.min(3, Math.max(0.4, Number(value.toFixed(2))));
 };
 const rotate = () => { rotation.value = (rotation.value + 90) % 360; };
 const resetView = () => { zoom.value = 1; rotation.value = 0; };
+
+/** 右栏评价编辑发生变化时标记为未保存 */
+const markDirty = () => { dirty.value = true; };
 
 const downloadCurrentPage = () => {
   const page = record.value?.pages?.[pageIndex.value];
@@ -400,6 +291,17 @@ const downloadCurrentPage = () => {
   }).catch(() => notify('下载失败'));
 };
 
+/** 从 Content-Disposition 解析服务端文件名（用户名+标题），优先 filename* 编码形式 */
+const dispositionName = (res) => {
+  const cd = res.headers?.['content-disposition'] || '';
+  const star = cd.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) {
+    try { return decodeURIComponent(star[1]); } catch (e) { /* 忽略解码失败，回退下一项 */ }
+  }
+  const plain = cd.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1] : '';
+};
+
 /** 导出：使用已保存版本（未保存的临时修改不参与导出） */
 const exportAs = async (format) => {
   if (dirty.value) {
@@ -413,7 +315,7 @@ const exportAs = async (format) => {
     const url = URL.createObjectURL(res.data);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `ai批改结果.${format}`;
+    a.download = dispositionName(res) || `ai批改结果.${format}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -423,7 +325,7 @@ const exportAs = async (format) => {
   }
 };
 
-/** 保存：覆盖评分、评语、详细点评、润色稿与手工批注 */
+/** 保存：覆盖评分、评语、详细点评、润色稿；兼容历史手工批注字段（前端已不再新增） */
 const save = async () => {
   if (!record.value || saving.value) return;
   saving.value = true;
@@ -497,8 +399,7 @@ const handleResize = () => {
   const narrow = window.innerWidth < 1280;
   if (narrow !== isNarrow.value) {
     isNarrow.value = narrow;
-    // 窄屏收起两侧面板让位原文；宽屏展开左栏，仍可手动收起
-    railOpen.value = !narrow;
+    // 窄屏收起右侧面板让位原文；宽屏默认收起，由用户按需展开
     panelOpen.value = false;
   }
 };
@@ -509,6 +410,8 @@ onMounted(async () => {
   await fetchList();
   const target = props.reviewId || items.value[0]?.id;
   if (target) await loadReview(target);
+  // 持久化/外部传入的 ID 可能已失效（记录被删除）：回退到列表第一条，避免结果页空白
+  if (!record.value && items.value.length) await loadReview(items.value[0].id);
   if (record.value && !canEdit.value) startPolling();
 });
 
@@ -599,45 +502,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload));
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* 底栏二级选项 */
-.tool-options {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: 6px;
-  padding-left: 8px;
-  border-left: 1px dashed var(--c-border);
-}
-.tool-options .ui-chip { height: 24px; font-size: var(--fs-xs); }
-
-.color-dot {
-  position: relative;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  cursor: pointer;
-}
-.color-dot.is-active { border-color: var(--c-text-secondary); }
-.color-dot[data-tip]::after {
-  content: attr(data-tip);
-  position: absolute;
-  left: 50%;
-  top: calc(100% + 6px);
-  transform: translateX(-50%);
-  padding: 3px 8px;
-  font-size: var(--fs-xs);
-  color: #fff;
-  background: rgba(32, 33, 36, .92);
-  border-radius: var(--r-sm);
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .12s;
-  z-index: 60;
-}
-.color-dot[data-tip]:hover::after { opacity: 1; }
-
+/* 底栏缩放/页码数值与保存状态 */
 .zoom-value,
 .page-value {
   min-width: 44px;
@@ -663,16 +528,8 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload));
   z-index: 4000;
 }
 
-/* 窄屏：左栏改为覆盖式抽屉，右栏同样覆盖，优先保留原文阅读空间 */
+/* 窄屏：右侧栏改为覆盖式抽屉，优先保留原文阅读空间 */
 @media (max-width: 1280px) {
-  .rail-slot {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    z-index: 30;
-    box-shadow: var(--shadow-2);
-  }
   .panel-slot {
     position: absolute;
     right: 0;

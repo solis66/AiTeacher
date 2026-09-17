@@ -2,9 +2,8 @@
   <div class="essay-review">
     <!-- 标题区域 -->
     <div class="review-header">
-      <span class="review-title">📝 作文批改结果</span>
+      <span class="review-title">作文批改结果</span>
       <span class="essay-type-badge" :class="essayTypeClass">{{ reviewData.essayType }}</span>
-      <span class="essay-type-icon">{{ essayTypeIcon }}</span>
     </div>
 
     <!-- 总分显示 -->
@@ -19,7 +18,7 @@
       </div>
       <!-- 总分校验警告 -->
       <div v-if="!isScoreConsistent && dimensionsSum > 0" class="score-warning">
-        <span class="warning-icon">⚠️</span>
+        <AlertCircle :size="16" class="warning-icon" />
         <span class="warning-text">
           总分({{ reviewData.score }})与各项评分之和({{ dimensionsSum }})不一致
         </span>
@@ -85,7 +84,7 @@
 
     <!-- 总体评价 -->
     <div v-if="reviewData.overallComment" class="comment-section">
-      <h4 class="section-title">📌 总体评价</h4>
+      <h4 class="section-title">总体评价</h4>
       <div class="comment-card">
         <p class="overall-comment">{{ reviewData.overallComment }}</p>
       </div>
@@ -93,12 +92,11 @@
 
     <!-- 亮点与问题 -->
     <div v-if="hasSummary" class="summary-section">
-      <h4 class="section-title">📊 作文分析</h4>
+      <h4 class="section-title">作文分析</h4>
       <div class="summary-grid">
         <!-- 亮点 -->
         <div v-if="reviewData.summary?.highlights?.length > 0" class="summary-card highlights">
           <div class="summary-header">
-            <span class="summary-icon">✨</span>
             <span class="summary-label">亮点</span>
           </div>
           <ul class="summary-list">
@@ -112,7 +110,6 @@
         <!-- 问题 -->
         <div v-if="reviewData.summary?.issues?.length > 0" class="summary-card issues">
           <div class="summary-header">
-            <span class="summary-icon">⚠️</span>
             <span class="summary-label">问题</span>
           </div>
           <ul class="summary-list">
@@ -127,11 +124,10 @@
 
     <!-- 改进建议 -->
     <div v-if="reviewData.improvements && reviewData.improvements.length > 0" class="improvements-section">
-      <h4 class="section-title">💡 改进建议</h4>
+      <h4 class="section-title">改进建议</h4>
       <div class="improvements-list">
         <div v-for="(item, idx) in reviewData.improvements" :key="idx" class="improvement-card">
           <div class="improvement-header">
-            <span class="improvement-icon">🎯</span>
             <span class="improvement-number">建议{{ idx + 1 }}</span>
           </div>
           <p class="improvement-content">{{ item }}</p>
@@ -164,6 +160,7 @@
  */
 
 import { defineProps, computed } from 'vue';
+import { AlertCircle } from 'lucide-vue-next';
 
 // 定义组件属性
 const props = defineProps({
@@ -180,22 +177,6 @@ const props = defineProps({
       rawResponse: ''
     })
   }
-});
-
-/**
- * 体裁图标映射
- */
-const essayTypeIcons = {
-  '议论文': '💬',
-  '记叙文': '📖',
-  '说明文': '📝'
-};
-
-/**
- * 获取体裁图标
- */
-const essayTypeIcon = computed(() => {
-  return essayTypeIcons[props.reviewData.essayType] || '📄';
 });
 
 /**
@@ -488,64 +469,45 @@ const getTotalScoreLevel = (score, total = 50) => {
 </script>
 
 <style scoped>
-/**
- * 作文批改结果容器样式
- */
 .essay-review {
-  padding: 24px;
-  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-  border-radius: 16px;
-  margin-top: 20px;
+  padding: 20px;
+  background: var(--c-bg);
   max-width: 100%;
   box-sizing: border-box;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
 }
 
-/* 标题区域样式 */
+/* 标题区域 */
 .review-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 24px;
+  gap: 10px;
+  margin-bottom: 20px;
   flex-wrap: wrap;
 }
 
 .review-title {
-  font-size: 20px;
+  font-size: var(--fs-xl);
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .essay-type-badge {
-  padding: 6px 16px;
-  border-radius: 20px;
-  font-size: 13px;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
   font-weight: 600;
-  color: white;
 }
 
-.type-argumentative {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-}
+.type-argumentative { color: var(--c-primary); background: var(--c-primary-soft); }
+.type-narrative     { color: var(--c-ok); background: var(--c-ok-soft); }
+.type-expository    { color: var(--c-warn); background: var(--c-warn-soft); }
 
-.type-narrative {
-  background: linear-gradient(135deg, #f59e0b, #f97316);
-}
-
-.type-expository {
-  background: linear-gradient(135deg, #10b981, #059669);
-}
-
-.essay-type-icon {
-  font-size: 24px;
-}
-
-/* 总分显示区域样式 */
+/* 总分显示 */
 .score-section {
   display: flex;
   flex-direction: column;
   align-items: center;
-  margin-bottom: 28px;
+  margin-bottom: 24px;
 }
 
 .score-card {
@@ -553,24 +515,16 @@ const getTotalScoreLevel = (score, total = 50) => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 24px 40px;
-  border-radius: 20px;
-  color: white;
-  min-width: 160px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+  padding: 20px 32px;
+  border-radius: var(--r-lg);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  min-width: 140px;
 }
 
-.score-card.high {
-  background: linear-gradient(135deg, #10b981, #34d399);
-}
-
-.score-card.medium {
-  background: linear-gradient(135deg, #f59e0b, #fbbf24);
-}
-
-.score-card.low {
-  background: linear-gradient(135deg, #ef4444, #f87171);
-}
+.score-card.high   { border-left: 4px solid var(--c-ok); }
+.score-card.medium { border-left: 4px solid var(--c-warn); }
+.score-card.low    { border-left: 4px solid var(--c-error); }
 
 .score-main {
   display: flex;
@@ -578,47 +532,49 @@ const getTotalScoreLevel = (score, total = 50) => {
 }
 
 .score-value {
-  font-size: 48px;
+  font-size: 40px;
   font-weight: 800;
+  color: var(--c-text);
 }
 
 .score-total {
-  font-size: 18px;
-  opacity: 0.8;
+  font-size: var(--fs-md);
+  color: var(--c-text-secondary);
   margin-left: 4px;
 }
 
 .score-label {
-  font-size: 14px;
-  opacity: 0.9;
-  margin-top: 8px;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+  margin-top: 6px;
 }
 
 .score-percent {
-  font-size: 12px;
-  opacity: 0.7;
-  margin-top: 4px;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+  margin-top: 2px;
 }
 
-/* 总分校验警告样式 */
+/* 总分校验警告 */
 .score-warning {
   margin-top: 12px;
-  padding: 10px 16px;
-  background-color: #fef3c7;
-  border: 1px solid #f59e0b;
-  border-radius: 10px;
-  font-size: 13px;
-  color: #92400e;
+  padding: 8px 12px;
+  background: var(--c-warn-soft);
+  border: 1px solid rgba(154, 103, 0, 0.14);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  color: var(--c-warn);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .warning-icon {
-  font-size: 16px;
+  display: inline-flex;
+  flex-shrink: 0;
 }
 
-/* 维度评分区域样式 */
+/* 维度评分 */
 .dimensions-section {
   margin-bottom: 24px;
 }
@@ -626,130 +582,112 @@ const getTotalScoreLevel = (score, total = 50) => {
 .section-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .section-title {
-  font-size: 16px;
+  font-size: var(--fs-lg);
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
   margin: 0;
 }
 
 .section-subtitle {
-  font-size: 13px;
-  color: #64748b;
+  font-size: var(--fs-sm);
+  color: var(--c-text-secondary);
 }
 
-/* 维度卡片网格 */
 .dimensions-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
 }
 
-/* 单个维度卡片 */
 .dimension-card {
-  background: white;
-  border-radius: 14px;
-  padding: 20px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
-  transition: all 0.3s ease;
-  border: 2px solid transparent;
-}
-
-.dimension-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  padding: 16px;
 }
 
 .dimension-card.highlight {
-  border-color: rgba(16, 185, 129, 0.3);
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.02) 0%, transparent 100%);
+  border-color: var(--c-ok);
+  background: var(--c-ok-soft);
 }
 
-/* 维度头部 */
 .dimension-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 14px;
-}
-
-.dimension-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: #334155;
-}
-
-.dimension-score-badge {
-  padding: 4px 12px;
-  border-radius: 12px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.dimension-score-badge.high {
-  background: rgba(16, 185, 129, 0.1);
-  color: #059669;
-}
-
-.dimension-score-badge.medium {
-  background: rgba(245, 158, 11, 0.1);
-  color: #d97706;
-}
-
-.dimension-score-badge.low {
-  background: rgba(239, 68, 68, 0.1);
-  color: #dc2626;
-}
-
-/* 进度条 */
-.dimension-progress {
   margin-bottom: 12px;
 }
 
+.dimension-name {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.dimension-score-badge {
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+
+.dimension-score-badge.high,
+.progress-fill.high,
+.level-tag.high {
+  color: var(--c-ok);
+  background: var(--c-ok-soft);
+}
+
+.dimension-score-badge.medium,
+.progress-fill.medium,
+.level-tag.medium {
+  color: var(--c-warn);
+  background: var(--c-warn-soft);
+}
+
+.dimension-score-badge.low,
+.progress-fill.low,
+.level-tag.low {
+  color: var(--c-error);
+  background: var(--c-error-soft);
+}
+
+.dimension-progress {
+  margin-bottom: 10px;
+}
+
 .progress-bar {
-  height: 10px;
-  background-color: #e2e8f0;
-  border-radius: 6px;
+  height: 8px;
+  background: var(--c-bg-muted);
+  border-radius: var(--r-pill);
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  border-radius: 6px;
-  transition: width 0.6s ease-out;
+  border-radius: var(--r-pill);
+  transition: width 0.4s ease-out;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding-right: 8px;
-}
-
-.progress-fill.high {
-  background: linear-gradient(90deg, #10b981, #34d399);
-}
-
-.progress-fill.medium {
-  background: linear-gradient(90deg, #f59e0b, #fbbf24);
-}
-
-.progress-fill.low {
-  background: linear-gradient(90deg, #ef4444, #f87171);
+  padding-right: 6px;
 }
 
 .progress-text {
   font-size: 10px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.9);
+  font-weight: 700;
+  color: inherit;
 }
 
-/* 维度信息 */
 .dimension-info {
   display: flex;
-  gap: 16px;
-  margin-bottom: 12px;
+  gap: 14px;
+  margin-bottom: 10px;
 }
 
 .info-item {
@@ -759,105 +697,85 @@ const getTotalScoreLevel = (score, total = 50) => {
 }
 
 .info-label {
-  font-size: 11px;
-  color: #94a3b8;
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
 }
 
 .info-value {
-  font-size: 13px;
-  font-weight: 600;
-  color: #475569;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--c-text);
 }
 
-/* 评分等级标签 */
 .dimension-level {
   display: flex;
   justify-content: flex-end;
 }
 
 .level-tag {
-  padding: 3px 10px;
-  border-radius: 8px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
-.level-tag.high {
-  background: rgba(16, 185, 129, 0.1);
-  color: #059669;
-}
-
-.level-tag.medium {
-  background: rgba(245, 158, 11, 0.1);
-  color: #d97706;
-}
-
-.level-tag.low {
-  background: rgba(239, 68, 68, 0.1);
-  color: #dc2626;
-}
-
-/* 总体评价区域样式 */
+/* 总体评价 */
 .comment-section {
   margin-bottom: 24px;
 }
 
 .comment-card {
-  background: white;
-  border-radius: 14px;
-  padding: 20px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  padding: 16px;
 }
 
 .overall-comment {
-  font-size: 14px;
+  font-size: var(--fs-md);
   line-height: 1.7;
-  color: #475569;
+  color: var(--c-text);
   margin: 0;
   white-space: pre-wrap;
 }
 
-/* 总结区域样式 */
+/* 作文分析 */
 .summary-section {
   margin-bottom: 24px;
 }
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
 }
 
 .summary-card {
-  background: white;
-  border-radius: 14px;
-  padding: 20px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  padding: 16px;
 }
 
 .summary-card.highlights {
-  border-left: 4px solid #10b981;
+  border-left: 3px solid var(--c-ok);
 }
 
 .summary-card.issues {
-  border-left: 4px solid #f59e0b;
+  border-left: 3px solid var(--c-warn);
 }
 
 .summary-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-
-.summary-icon {
-  font-size: 18px;
+  gap: 6px;
+  margin-bottom: 12px;
 }
 
 .summary-label {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1e293b;
+  font-size: var(--fs-md);
+  font-weight: 700;
+  color: var(--c-text);
 }
 
 .summary-list {
@@ -870,7 +788,7 @@ const getTotalScoreLevel = (score, total = 50) => {
   display: flex;
   gap: 10px;
   padding: 8px 0;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .summary-item:last-child {
@@ -878,147 +796,74 @@ const getTotalScoreLevel = (score, total = 50) => {
 }
 
 .item-number {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background: #e2e8f0;
+  background: var(--c-bg-muted);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
-  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--c-text-secondary);
   flex-shrink: 0;
 }
 
 .item-text {
-  font-size: 13px;
-  line-height: 1.5;
-  color: #475569;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--c-text);
 }
 
-/* 改进建议区域样式 */
+/* 改进建议 */
 .improvements-section {
   margin-bottom: 24px;
 }
 
 .improvements-list {
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .improvement-card {
-  background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 100%);
-  border-radius: 14px;
-  padding: 18px;
-  border: 1px solid rgba(56, 189, 248, 0.2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-left: 3px solid var(--c-primary);
+  border-radius: var(--r-lg);
+  padding: 14px 16px;
 }
 
 .improvement-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.improvement-icon {
-  font-size: 16px;
+  gap: 6px;
+  margin-bottom: 6px;
 }
 
 .improvement-number {
-  font-size: 14px;
-  font-weight: 600;
-  color: #0369a1;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--c-primary);
 }
 
 .improvement-content {
-  font-size: 14px;
-  line-height: 1.6;
-  color: #334155;
+  font-size: var(--fs-md);
+  line-height: 1.7;
+  color: var(--c-text);
   margin: 0;
 }
 
-/**
- * 响应式设计 - 平板设备 (768px以下)
- */
 @media (max-width: 768px) {
-  .essay-review {
-    padding: 18px;
-    margin-top: 16px;
-  }
-  
-  .review-title {
-    font-size: 18px;
-  }
-  
-  .score-card {
-    padding: 20px 32px;
-    min-width: 140px;
-  }
-  
-  .score-value {
-    font-size: 40px;
-  }
-  
-  .dimensions-grid {
-    grid-template-columns: 1fr;
-  }
-  
-  .summary-grid {
-    grid-template-columns: 1fr;
-  }
+  .essay-review { padding: 16px; }
+  .score-value { font-size: 34px; }
+  .dimensions-grid { grid-template-columns: 1fr; }
+  .summary-grid { grid-template-columns: 1fr; }
 }
 
-/**
- * 响应式设计 - 手机设备 (480px以下)
- */
 @media (max-width: 480px) {
-  .essay-review {
-    padding: 14px;
-    border-radius: 12px;
-  }
-  
-  .review-header {
-    gap: 8px;
-    margin-bottom: 20px;
-  }
-  
-  .review-title {
-    font-size: 16px;
-  }
-  
-  .essay-type-badge {
-    padding: 4px 12px;
-    font-size: 12px;
-  }
-  
-  .essay-type-icon {
-    font-size: 20px;
-  }
-  
-  .score-card {
-    padding: 16px 24px;
-    min-width: 120px;
-  }
-  
-  .score-value {
-    font-size: 32px;
-  }
-  
-  .score-total {
-    font-size: 16px;
-  }
-  
-  .dimension-card {
-    padding: 16px;
-  }
-  
-  .dimension-info {
-    gap: 12px;
-  }
-  
-  .improvement-card {
-    padding: 14px;
-  }
+  .essay-review { padding: 14px; }
+  .review-title { font-size: var(--fs-lg); }
+  .score-card { padding: 16px 24px; min-width: 120px; }
+  .score-value { font-size: 30px; }
 }
 </style>

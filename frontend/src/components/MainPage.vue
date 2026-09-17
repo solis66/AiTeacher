@@ -1,90 +1,136 @@
 <template>
-  <div class="main-page" :class="{ 'reviewing': view === 'review' }">
-    <!-- ===================== 左侧边栏（批改结果页不显示） ===================== -->
-    <div v-if="view === 'chat'" class="sidebar">
-      <div class="sidebar-header">
-        <h1 class="system-title">AI智能批改教师</h1>
+  <div class="app-shell">
+    <!-- ===================== 顶部导航栏 ===================== -->
+    <header class="app-navbar">
+      <div class="navbar-brand">
+        <span class="brand-logo"><GraduationCap :size="20" /></span>
+        <span class="brand-name">AI智能批改教师</span>
       </div>
 
-      <div class="sidebar-buttons">
-        <button class="sidebar-action-btn" @click="newChat">
-          <span class="btn-icon">+</span>
-          <span class="btn-text">新对话</span>
-        </button>
-        <button class="sidebar-action-btn" @click="openReviewList">
-          <span class="btn-icon">📋</span>
-          <span class="btn-text">批改记录</span>
-        </button>
-        <button class="sidebar-action-btn" @click="syncHistory" :disabled="isSyncing">
-          <span class="btn-icon">{{ isSyncing ? '⏳' : '🔄' }}</span>
-          <span class="btn-text">{{ isSyncing ? '同步中...' : '同步' }}</span>
-        </button>
+      <div class="navbar-user">
+        <span class="user-avatar">{{ currentUser?.charAt(0).toUpperCase() || 'U' }}</span>
+        <span class="user-name">{{ currentUser || '用户' }}</span>
+        <button type="button" class="logout-btn" @click="handleLogout">退出</button>
       </div>
+    </header>
 
-      <div class="history-section">
-        <template v-for="(group, date) in groupedHistory" :key="date">
-          <div class="history-group">
-            <div class="history-time">{{ date }}</div>
-            <div
-              v-for="chat in group"
-              :key="chat.id"
-              class="history-item"
-              :class="{ 'active': currentChatId === chat.id }"
-              @click="loadChat(chat.id)"
+    <div class="app-body">
+      <!-- ===================== 左侧边栏 ===================== -->
+      <aside class="app-sidebar">
+        <nav class="sidebar-nav" aria-label="功能导航">
+          <template v-for="item in navItems" :key="item.key">
+            <button
+              type="button"
+              class="side-btn"
+              :class="{ 'is-active': page === item.key }"
+              @click="go(item.key)"
             >
-              <span class="history-label">{{ historyLabel(chat) }}</span>
+              <component :is="item.icon" :size="18" />
+              <span>{{ item.label }}</span>
+            </button>
+
+            <!-- 批改结果：其下直接展示作文列表 -->
+            <ReviewRail
+              v-if="item.key === 'results' && page === 'results'"
+              class="side-sub"
+              :items="reviewItems"
+              :username="currentUser"
+              :active-id="activeReviewId"
+              :loading="reviewListLoading"
+              @select="openReview"
+            />
+
+            <!-- AI咨询：其下展示新对话入口 + 最近 7 天的会话记录 -->
+            <div v-if="item.key === 'consult' && page === 'consult'" class="side-sub">
+              <button type="button" class="new-chat-btn" @click="startNewConversation">
+                <Plus :size="15" />
+                <span>新对话</span>
+              </button>
+
+              <div class="history-section">
+                <p v-if="sessionsLoading" class="consult-hint">加载中…</p>
+                <template v-else-if="sessionGroups.length">
+                  <div v-for="group in sessionGroups" :key="group.label" class="history-group">
+                    <p class="history-time">{{ group.label }}</p>
+                    <button
+                      v-for="chat in group.items"
+                      :key="chat.session_id"
+                      type="button"
+                      class="history-item"
+                      :class="{ active: chat.session_id === currentSessionId }"
+                      :title="`${chat.date} ${chat.time} · ${chat.message_count} 条消息`"
+                      @click="openSession(chat)"
+                    >
+                      <span class="history-item-time">{{ chat.date }} {{ chat.time }}</span>
+                      <span class="history-item-title">{{ chat.title }}</span>
+                    </button>
+                  </div>
+                </template>
+                <p v-else class="consult-hint">最近 7 天暂无咨询记录</p>
+              </div>
             </div>
-          </div>
-        </template>
-      </div>
+          </template>
+        </nav>
+      </aside>
 
-      <div class="user-info-sidebar">
-        <div class="avatar">{{ currentUser?.charAt(0).toUpperCase() || 'U' }}</div>
-        <div class="user-details">
-          <div class="user-name">{{ currentUser || '用户' }}</div>
-          <button class="logout-btn" @click="handleLogout">退出登录</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ===================== 主内容区 ===================== -->
-    <div class="main-content">
-
-      <!-- 视图一：AI 对话首页 -->
-      <template v-if="view === 'chat'">
-        <ChatHistory
-          :messages="messages"
+      <!-- ===================== 右侧内容区 ===================== -->
+      <main class="app-main">
+        <!-- 开始批改 -->
+        <ReviewSubmit
+          v-if="page === 'submit'"
           :username="currentUser"
-          @preview-image="previewImageFull"
-          @open-review="openReview"
-          @retry-review="retryReview"
-        />
-        <InputArea
-          v-model="inputText"
-          :grade="selectedGrade"
-          :is-loading="isLoading"
-          @update:grade="selectGrade"
-          @send="handleSend"
+          @submitted="handleSubmitted"
           @error="showError"
         />
-      </template>
 
-      <!-- 视图二：独立的作文批改结果页 -->
-      <ReviewWorkbench
-        v-else
-        :review-id="activeReviewId"
-        :username="currentUser"
-        @back="backToChat"
-      />
+        <!-- 批改结果 -->
+        <ReviewWorkbench
+          v-else-if="page === 'results'"
+          :review-id="activeReviewId"
+          :username="currentUser"
+          @back="go('submit')"
+          @list="onReviewList"
+        />
+
+        <!-- 学情报告 -->
+        <LearningReport
+          v-else-if="page === 'profile'"
+          :username="currentUser"
+        />
+
+        <!-- AI 咨询（只读对话，零批改入口；会话列表在全局侧边栏「AI咨询」下） -->
+        <section v-else class="consult-page">
+          <ChatHistory
+            :messages="messages"
+            :username="currentUser"
+            @preview-image="previewImageFull"
+            @open-review="openReview"
+          />
+          <form class="consult-input" @submit.prevent="handleConsultSend">
+            <input
+              v-model="inputText"
+              class="ui-input consult-text"
+              placeholder="请输入与学情、写作方法相关的问题…"
+              autocomplete="off"
+            />
+            <button
+              type="submit"
+              class="ui-btn ui-btn--primary send-btn"
+              :disabled="isLoading || !inputText.trim()"
+            >
+              <Loader2 v-if="isLoading" :size="15" class="spin" />
+              <Send v-else :size="15" />
+            </button>
+          </form>
+        </section>
+      </main>
     </div>
 
     <!-- 错误提示 -->
     <div v-if="errorMessage" class="error-toast">
-      <div class="error-content">
-        <span class="error-icon">⚠️</span>
-        <span class="error-text">{{ errorMessage }}</span>
-        <button class="error-close" @click="errorMessage = ''">×</button>
-      </div>
+      <span class="error-icon"><AlertCircle :size="16" /></span>
+      <span class="error-text">{{ errorMessage }}</span>
+      <button class="error-close" @click="errorMessage = ''">×</button>
     </div>
 
     <!-- 全屏图片预览 -->
@@ -99,92 +145,98 @@
 
 <script setup>
 /**
- * 主页面
+ * 主页面（应用外壳）
  *
- * 本次变更（对应需求「优化首页 AI 对话界面，新增独立的作文批改结果页」）：
- * 1. 新增视图切换：'chat'（对话首页）与 'review'（批改工作台），登录页保持不变。
- *    未引入 vue-router，返回首页时会话、附件与批改入口全部保留。
- * 2. 作文提交改走批改工作台接口（POST /api/review），不再在对话里直接出报告。
- * 3. 提交后轮询批改状态，分别落到「批改中 / 完成入口 / 失败重试」三种消息形态。
- * 4. 咨询类提问仍走原有的 /chat 接口。
+ * 需求对应（三：页面布局）：
+ * - 顶部导航栏（品牌 + 用户信息）+ 左侧边栏 + 右侧内容区
+ * - 页面切换入口只在侧边栏：开始批改 / 批改结果 / 学情报告 / AI咨询，
+ *   且「批改结果」下展示作文列表、「AI咨询」下展示会话记录
+ * - 仅登录取用；各页之间用本地视图切换，不引入 vue-router
+ * - AI咨询页为纯 RAG 咨询对话，不挂任何上传/批改表单（零批改入口）
  */
-
-import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { ref, onMounted, reactive, computed } from 'vue';
+import {
+  Calculator, ClipboardList, BarChart3, MessagesSquare,
+  GraduationCap, Send, Loader2, AlertCircle, Plus
+} from 'lucide-vue-next';
 import request from '../api/request.js';
-import { getToken, getUser, clearAuth, parseJwt } from '../utils/auth.js';
+import { getToken, getUser, clearAuth } from '../utils/auth.js';
 import ChatHistory from './ChatHistory.vue';
-import InputArea from './InputArea.vue';
+import ReviewRail from './review/ReviewRail.vue';
 import ReviewWorkbench from './review/ReviewWorkbench.vue';
-import { reviewPageUrl } from '../utils/reviewUrl.js';
+import ReviewSubmit from './review/ReviewSubmit.vue';
+import LearningReport from './report/LearningReport.vue';
 
 const emit = defineEmits(['logout']);
 
+const navItems = reactive([
+  { key: 'submit', label: '开始批改', icon: Calculator },
+  { key: 'results', label: '批改结果', icon: ClipboardList },
+  { key: 'profile', label: '学情报告', icon: BarChart3 },
+  { key: 'consult', label: 'AI咨询', icon: MessagesSquare },
+]);
+
 // ---------------- 认证与全局状态 ----------------
-const currentUser = ref('');
-const isSyncing = ref(false);
+// 直接同步初始化：子组件的 onMounted 早于父组件执行，若等到父组件 onMounted 再赋值，
+// 子组件首次请求会带上空的 username（回退成 anonymous），导致接口查不到数据、页面空白
+const currentUser = ref(getUser());
+// 刷新后恢复上次所在的页面与打开的批改记录（localStorage），而不是每次都回到「开始批改」
+const PAGE_KEY = 'ai_teacher_last_page';
+const REVIEW_KEY = 'ai_teacher_last_review_id';
+const SESSION_KEY = 'ai_teacher_last_session_id';
+const VALID_PAGES = ['submit', 'results', 'profile', 'consult'];
+const storedPage = localStorage.getItem(PAGE_KEY);
+const page = ref(VALID_PAGES.includes(storedPage) ? storedPage : 'submit');
+const activeReviewId = ref(localStorage.getItem(REVIEW_KEY) || null);
 const fullscreenImage = ref(null);
 const errorMessage = ref('');
 
-// ---------------- 视图状态 ----------------
-const view = ref('chat');
-const activeReviewId = ref(null);
+// ---------------- 批改结果：作文列表（由 ReviewWorkbench 回传，展示在侧边栏） ----------------
+const reviewItems = ref([]);
+const reviewListLoading = ref(false);
+/** 接收批改工作台同步的列表、当前打开的记录与加载状态 */
+const onReviewList = (payload) => {
+  reviewItems.value = Array.isArray(payload?.items) ? payload.items : [];
+  reviewListLoading.value = !!payload?.loading;
+  // 工作台自行回退打开的记录（如持久化 ID 已失效）时，同步回 activeReviewId，保证侧边栏高亮一致
+  const id = payload?.activeId || null;
+  if (id && id !== activeReviewId.value) {
+    activeReviewId.value = id;
+    localStorage.setItem(REVIEW_KEY, id);
+  }
+};
 
-// ---------------- 对话状态 ----------------
+// ---------------- AI 咨询会话状态 ----------------
 const messages = ref([]);
 const inputText = ref('');
 const isLoading = ref(false);
-const chatHistory = ref([]);
-const currentChatId = ref(null);
-const isCreatingChat = ref(false);
+// 会话列表（服务端按天存储，仅返回最近 7 天）
+const sessions = ref([]);
+const sessionsLoading = ref(false);
+// 当前打开的会话ID：空串表示「新对话」，首次保存时由服务端生成
+const currentSessionId = ref(localStorage.getItem(SESSION_KEY) || '');
 
-// ---------------- 输入区状态 ----------------
-const selectedGrade = ref('');
+const CONSULT_HISTORY_MAX = 6;
+// 单次持久化的最大消息条数（与后端 MAX_SESSION_MESSAGES 对齐）
+const CONSULT_PERSIST_MAX = 200;
 
-let dateCheckTimer = null;
-let lastCheckedDate = '';
-const pollTimers = new Map();   // reviewId -> timer，避免组件销毁后继续轮询
+/** 把会话列表按天分组（列表已按时间倒序，同一天的记录天然相邻） */
+const sessionGroups = computed(() => {
+  const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const namedDays = { [dayKey(today)]: '今天', [dayKey(yesterday)]: '昨天' };
 
-const STORAGE_KEY = 'ai_teacher_chat_history';
-const MAX_HISTORY = 100;
-const MAX_HISTORY_DAYS = 7;
-const POLL_INTERVAL = 2500;     // 批改状态轮询间隔（毫秒）
-const CONSULT_HISTORY_MAX = 6;  // 咨询时随请求带回的最近消息条数（后端还会再裁剪一次）
-
-const essayKeywords = ['作文', '文章', '写作', 'essay', '作文题', '请批改', '请点评', '写一篇', '写了一篇',
-  '字数', '段落', '开头', '结尾', '议论文', '记叙文', '说明文'];
-const consultationKeywords = ['如何', '怎么', '怎样', '为什么', '请问', '我想问', '问一下', '咨询',
-  '方法', '技巧', '策略', '要点', '建议', '告诉我', '分析一下'];
-
-// ---------------- 历史记录分组 ----------------
-const groupedHistory = computed(() => {
-  const groups = {};
-  chatHistory.value.forEach((chat) => {
-    const displayDate = chat.displayDate || formatDate(chat.date);
-    if (!groups[displayDate]) groups[displayDate] = [];
-    groups[displayDate].push(chat);
-  });
-
-  const dateOrder = ['现在', '今天', '昨天'];
-  const sortedDates = Object.keys(groups).sort((a, b) => {
-    const indexA = dateOrder.indexOf(a);
-    const indexB = dateOrder.indexOf(b);
-    if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-    if (indexA !== -1) return -1;
-    if (indexB !== -1) return 1;
-    return b.localeCompare(a);
-  });
-
-  const sorted = {};
-  sortedDates.forEach((date) => { sorted[date] = groups[date]; });
-  return sorted;
+  const groups = [];
+  for (const item of sessions.value) {
+    const label = namedDays[item.date] || item.date;
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(item);
+    else groups.push({ label, items: [item] });
+  }
+  return groups;
 });
-
-/** 侧边栏历史条目文案：优先显示题目，其次显示正文开头 */
-const historyLabel = (chat) => {
-  const first = chat.messages?.[0] || {};
-  const text = first.title || first.content || '新对话';
-  return text.length > 18 ? `${text.slice(0, 18)}...` : text;
-};
 
 // ---------------- 通用工具 ----------------
 const showError = (message) => {
@@ -192,625 +244,332 @@ const showError = (message) => {
   setTimeout(() => { errorMessage.value = ''; }, 5000);
 };
 
-/**
- * 作文提交判定（仅在用户没有主动选择体裁/年级时作为兜底）
- *
- * 规则：
- *  1. 少于 100 字：不是作文，直接按咨询处理
- *  2. 命中咨询关键词且未命中作文关键词：按咨询处理（避免“我想问…”被误判）
- *  3. 命中作文关键词：按作文处理
- *  4. 都没有：按篇幅判断。原阈值 500 字对初中作文过高——一篇 200 多字的
- *     短文会被误判成咨询，直接送到问答链路。这里降到 200 字。
- */
-const isEssaySubmission = (text) => {
-  const trimmed = (text || '').trim();
-  const len = trimmed.length;
-  if (len < 100) return false;
-
-  const hasEssayKeywords = essayKeywords.some((kw) => trimmed.includes(kw));
-  const hasConsultKeywords = consultationKeywords.some((kw) => trimmed.includes(kw));
-
-  if (hasConsultKeywords && !hasEssayKeywords) return false;
-  if (hasEssayKeywords) return true;
-  return len >= 200;
+// 统一切换页面并持久化，保证刷新后能回到上次所在页面
+const go = (key) => {
+  if (!VALID_PAGES.includes(key)) key = 'submit';
+  page.value = key;
+  localStorage.setItem(PAGE_KEY, key);
 };
 
-// ---------------- 发送流程 ----------------
-/**
- * 处理发送
- *
- * 分支：
- *  - 作文（含附件/命题信息/长正文）→ 创建批改任务并轮询
- *  - 其他 → 走咨询问答
- */
-const handleSend = async ({ content, grade, title, requirements, attachments }) => {
-  const userMessage = (content || '').trim();
-  const hasAttachments = (attachments || []).length > 0;
-  // 主动选择了年级，或填写了题目/题干，等于明确表示「这次是作文」，不再交给关键词猜测。
-  // 提交成功后会把年级清空，避免下一条咨询消息被误判成作文。
-  const hasMeta = !!(title || requirements || grade);
-  const isEssay = hasAttachments || hasMeta || isEssaySubmission(userMessage);
-
-  if (isEssay) {
-    // 年级必须选择后才能提交；体裁已移除，由 AI 依据题干要求判定
-    if (!grade) return showError('请先选择年级（七年级、八年级或九年级）');
-    if (!userMessage && !hasAttachments) return showError('请填写作文正文，或上传作文图片 / PDF');
-  } else if (!userMessage) {
-    return showError('请输入内容');
+// ---------------- 视图切换 ----------------
+/** 提交成功：跳转到批改结果页并打开最新一条记录 */
+const handleSubmitted = (records) => {
+  const first = records?.[0];
+  if (first?.id) {
+    activeReviewId.value = first.id;
+    localStorage.setItem(REVIEW_KEY, first.id);
   }
-
-  // 用户消息：正文 + 命题信息 + 附件（保留对象引用，便于批改 ID 回填）
-  const userMsg = {
-    role: 'user',
-    content: userMessage,
-    type: isEssay ? 'essay_submission' : 'normal',
-    essayType: null,
-    grade: isEssay ? grade : null,
-    title: isEssay ? title : '',
-    requirements: isEssay ? requirements : '',
-    attachments: (attachments || []).map((att) => ({ kind: att.kind, name: att.name, url: att.url })),
-    timestamp: Date.now()
-  };
-  messages.value.push(userMsg);
-
-  if (!isEssay) {
-    await sendConsultation(userMessage);
-    return;
-  }
-  await submitReview({ userMsg, userMessage, grade, title, requirements, attachments });
-
-  // 年级是一次性表单选择，提交后清空：下一条消息默认按咨询处理，
-  // 需要再批改时重新选择即可（否则残存的选择会把咨询问题误送进批改链路）。
-  selectedGrade.value = '';
+  go('results');
+};
+/** 从咨询历史点击批改卡片 → 打开对应批改结果 */
+const openReview = (reviewId) => {
+  if (!reviewId) return;
+  activeReviewId.value = reviewId;
+  localStorage.setItem(REVIEW_KEY, reviewId);
+  go('results');
 };
 
-/** 提交批改任务并进入轮询 */
-const submitReview = async ({ userMsg, userMessage, grade, title, requirements, attachments }) => {
-  isLoading.value = true;
-
-  // 先插入“批改中”占位，用户立刻能看到状态
-  const pendingMessage = {
-    role: 'assistant',
-    type: 'review_pending',
-    status: 'loading',
-    reviewId: null,
-    timestamp: Date.now()
-  };
-  messages.value.push(pendingMessage);
-
-  try {
-    const formData = new FormData();
-    formData.append('grade', grade);
-    formData.append('title', title || '');
-    formData.append('requirements', requirements || '');
-    formData.append('body', userMessage || '');
-    // 按用户在输入区排好的顺序追加附件
-    (attachments || []).forEach((att) => formData.append('files', att.file, att.name));
-
-    // X-Username 由 request.js 请求拦截器统一注入（数据归属标识）
-    const response = await request.post('/api/review', formData);
-
-    if (!response.data.success) {
-      replaceMessage(pendingMessage, {
-        role: 'assistant',
-        type: 'review_failed',
-        error: response.data.message || '创建批改任务失败',
-        timestamp: Date.now()
-      });
-      return;
-    }
-
-    const review = response.data.data;
-    // 占位消息绑定批改 ID，后续轮询就地更新
-    pendingMessage.reviewId = review.id;
-    // 把批改 ID 回填到用户消息，便于返回首页/刷新后仍能取到缩略图与批改入口
-    userMsg.reviewId = review.id;
-
-    saveCurrentChat();
-    startPolling(review.id, pendingMessage);
-  } catch (error) {
-    replaceMessage(pendingMessage, {
-      role: 'assistant',
-      type: 'review_failed',
-      error: error.response?.data?.message || '网络连接失败，请检查后端服务是否启动',
-      timestamp: Date.now()
-    });
-  } finally {
-    isLoading.value = false;
-  }
-};
-
-/** 轮询批改状态，直到完成或失败 */
-const startPolling = (reviewId, message) => {
-  stopPolling(reviewId);
-  const tick = async () => {
-    try {
-      const response = await request.get(`/api/review/${reviewId}`);
-      if (!response.data.success) return;
-      const data = response.data.data;
-
-      if (data.status === 'done') {
-        stopPolling(reviewId);
-        replaceMessage(message, {
-          role: 'assistant',
-          type: 'review_entry',
-          reviewId,
-          essayType: data.input?.essay_type,
-          score: data.score,
-          rating: data.rating,
-          pageCount: data.page_count,
-          // 只存文件名，图片地址在渲染时按 owner 现算（见 ChatHistory.entryThumb）
-          thumb: data.thumb || 'page-1.jpg',
-          thumbUrl: data.thumb ? reviewPageUrl(reviewId, data.thumb, currentUser.value) : '',
-          timestamp: Date.now()
-        });
-        saveCurrentChat();
-      } else if (data.status === 'failed') {
-        stopPolling(reviewId);
-        replaceMessage(message, {
-          role: 'assistant',
-          type: 'review_failed',
-          reviewId,
-          error: data.error || '批改失败，请重试',
-          timestamp: Date.now()
-        });
-        saveCurrentChat();
-      }
-    } catch (error) {
-      // 轮询期间的网络抖动不立即判失败，继续按间隔重试
-      console.warn('[批改轮询] 请求失败，稍后重试', error?.message);
-    }
-  };
-  tick();
-  pollTimers.set(reviewId, setInterval(tick, POLL_INTERVAL));
-};
-
-const stopPolling = (reviewId) => {
-  const timer = pollTimers.get(reviewId);
-  if (timer) {
-    clearInterval(timer);
-    pollTimers.delete(reviewId);
-  }
-};
-
-/** 就地替换消息（保持列表长度与滚动位置稳定） */
-const replaceMessage = (target, replacement) => {
-  const index = messages.value.indexOf(target);
-  if (index !== -1) messages.value[index] = replacement;
-};
-
-/** 失败重试：复用已上传材料，只重跑批改 */
-const retryReview = async (reviewId) => {
-  const message = messages.value.find((m) => m.reviewId === reviewId && m.type === 'review_failed');
-  if (!message) return;
-  try {
-    await request.post(`/api/review/${reviewId}/retry`);
-    replaceMessage(message, {
-      role: 'assistant',
-      type: 'review_pending',
-      status: 'loading',
-      reviewId,
-      timestamp: Date.now()
-    });
-    startPolling(reviewId, messages.value.find((m) => m.reviewId === reviewId && m.type === 'review_pending'));
-    saveCurrentChat();
-  } catch (error) {
-    showError(error.response?.data?.message || '重试失败，请稍后再试');
-  }
-};
-
-/** 咨询类对话（沿用原有 /chat 接口） */
-/**
- * 对话记忆：取本会话最近若干轮可作为上下文的消息
- *
- * 只收有正文的问答消息：批改中占位、批改卡片、失败提示等没有 content 的消息会被排除。
- * 这是前端的初筛，轮次与长度上限由后端 utils.chat_memory 强制，前端传多也不会生效。
- * 之前 /chat 只发一条 message，模型看不到任何上文，用户追问时无法衔接。
- */
+// ---------------- AI 咨询（只读问答，走 /chat） ----------------
 const buildConsultationHistory = (currentMessage) => {
   const usable = messages.value.filter((m) => (
     (m.role === 'user' || m.role === 'assistant')
-    && typeof m.content === 'string'
-    && m.content.trim()
-    && (m.type === 'normal' || m.type === 'essay_submission')
+    && typeof m.content === 'string' && m.content.trim()
   ));
-  // 刚入列、且会单独作为 message 传出的当前提问要剔除，否则模型会看到两遍
   const current = (currentMessage || '').trim();
   if (usable.length && usable[usable.length - 1].content.trim() === current) usable.pop();
   return usable.slice(-CONSULT_HISTORY_MAX).map((m) => ({ role: m.role, content: m.content }));
 };
 
-const sendConsultation = async (userMessage) => {
+const handleConsultSend = async () => {
+  const text = inputText.value.trim();
+  if (!text || isLoading.value) return;
+  inputText.value = '';
+  messages.value.push({ role: 'user', content: text, type: 'normal', timestamp: Date.now() });
+  messages.value.push({ role: 'assistant', content: '', type: 'normal', status: 'loading', timestamp: Date.now() });
+  // 必须取出数组内的响应式代理再修改：直接改 push 进去的原始对象不会触发 Vue 更新，
+  // 流式增量会「一个字都不渲染」，直到整段结束才突然出现
+  const pending = messages.value[messages.value.length - 1];
   isLoading.value = true;
-  const pending = { role: 'assistant', content: '', type: 'loading', status: 'loading', timestamp: Date.now() };
-  messages.value.push(pending);
+
+  const historyPayload = buildConsultationHistory(text);
+  let errorText = '';
+
+  // 认证与数据归属请求头（与 api/request.js 拦截器保持一致）
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${getToken()}`,
+    'X-Username': currentUser.value || 'anonymous'
+  };
+
   try {
-    // X-Username 由 request.js 请求拦截器统一注入：后端用它归属数据，
-    // 缺失时全部落到 'anonymous'，记忆和日志都无法按人区分。
-    const response = await request.post(
-      '/chat',
-      {
-        message: userMessage,
-        type: 'consultation',
-        history: buildConsultationHistory(userMessage)
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ message: text, type: 'consultation', stream: true, history: historyPayload })
+    });
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('text/event-stream')) {
+      // 非流式兜底：后端未按 SSE 返回时，按整段 JSON 处理
+      const data = await res.json();
+      if (res.ok && data.success) {
+        const d = data.data;
+        pending.content = d.raw_response || d.overall_comment || '（无回复）';
+      } else {
+        errorText = data.message || '处理请求失败，请稍后重试。';
       }
-    );
-    if (response.data.success) {
-      const data = response.data.data;
-      replaceMessage(pending, {
-        role: 'assistant',
-        content: data.raw_response || data.overall_comment || '',
-        type: 'normal',
-        timestamp: Date.now()
-      });
     } else {
-      replaceMessage(pending, {
-        role: 'assistant',
-        content: response.data.message || '处理请求失败，请稍后重试。',
-        type: 'normal',
-        timestamp: Date.now()
-      });
+      // 流式：用 ReadableStream 增量读 SSE，逐块追加到正在输入的回复
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let finished = false;
+      while (!finished) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sepIndex;
+        while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sepIndex).trim();
+          buffer = buffer.slice(sepIndex + 2);
+          const payload = /^data:\s*(.*)$/s.exec(frame)?.[1];
+          if (!payload) continue;
+          try {
+            const evt = JSON.parse(payload);
+            if (evt.type === 'delta' && evt.content) {
+              pending.content += evt.content;
+            } else if (evt.type === 'error') {
+              errorText = evt.content || '处理请求失败，请稍后重试。';
+            } else if (evt.type === 'done') {
+              finished = true;
+              break;
+            }
+          } catch (e) { /* 跳过无法解析的帧 */ }
+        }
+      }
+      // 流结束后可能残留半帧，忽略即可（服务端以 done / 连接关闭收尾）
     }
   } catch (error) {
-    replaceMessage(pending, {
-      role: 'assistant',
-      content: error.response?.data?.message || '网络连接失败，请检查后端服务是否启动',
-      type: 'normal',
-      timestamp: Date.now()
-    });
+    if (error.name === 'AbortError') return;
+    errorText = error.response?.data?.message || error.message || '网络连接失败，请检查后端服务是否启动';
   } finally {
+    if (errorText) pending.content = errorText;
+    if (!pending.content) pending.content = '（无回复）';
+    pending.type = 'normal';
+    pending.status = '';
     isLoading.value = false;
-    saveCurrentChat();
+    // 问答结束后把最新会话持久化，供下次刷新/咨询恢复
+    saveHistoryToServer();
   }
 };
 
-// ---------------- 视图切换 ----------------
-/** 打开批改页（从对话入口或历史记录 ID） */
-const openReview = (reviewId) => {
-  if (!reviewId) return;
-  activeReviewId.value = reviewId;
-  view.value = 'review';
+// ---------------- 咨询历史持久化（按天/会话存储，跨刷新恢复，且作为 AI 上下文） ----------------
+/** 把 messages 裁剪成持久化所需的 {role, content, timestamp} 列表 */
+const toPersistedHistory = () => messages.value
+  .filter((m) => (m.role === 'user' || m.role === 'assistant')
+    && typeof m.content === 'string' && m.content.trim())
+  .slice(-CONSULT_PERSIST_MAX)
+  .map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp || null }));
+
+/** 服务端时间字符串（'YYYY-MM-DD HH:MM:SS'）转毫秒时间戳 */
+const toTimestamp = (text) => {
+  const parsed = Date.parse(String(text || '').replace(' ', 'T'));
+  return Number.isNaN(parsed) ? Date.now() : parsed;
 };
 
-/** 左侧「批改记录」：直接进入批改工作台（左侧列表可按 ID 再次打开） */
-const openReviewList = () => {
-  activeReviewId.value = activeReviewId.value || null;
-  view.value = 'review';
+/** 历史消息 → 会话气泡消息 */
+const toBubbles = (list) => (Array.isArray(list) ? list : [])
+  .filter((m) => (m.role === 'user' || m.role === 'assistant')
+    && typeof m.content === 'string' && m.content.trim())
+  .map((m) => ({
+    role: m.role,
+    content: m.content,
+    type: 'normal',
+    timestamp: toTimestamp(m.time)
+  }));
+
+/** 拉取最近 7 天的会话列表 */
+const loadSessions = async () => {
+  sessionsLoading.value = true;
+  try {
+    const res = await request.get('/get_history/list');
+    if (res.data?.success && Array.isArray(res.data.sessions)) {
+      sessions.value = res.data.sessions;
+      return res.data.sessions;
+    }
+  } catch (error) {
+    console.warn('[MainPage] 加载会话列表失败:', error?.message || error);
+  } finally {
+    sessionsLoading.value = false;
+  }
+  return [];
 };
 
-const backToChat = () => {
-  view.value = 'chat';
-  saveCurrentChat();
+/** 打开某个历史会话（回填该会话的全部消息） */
+const openSession = async (session) => {
+  const sessionId = session?.session_id;
+  if (!sessionId) return;
+  currentSessionId.value = sessionId;
+  localStorage.setItem(SESSION_KEY, sessionId);
+  messages.value = [];
+  try {
+    const res = await request.get('/get_history', { params: { session_id: sessionId } });
+    if (res.data?.success) messages.value = toBubbles(res.data.history);
+  } catch (error) {
+    console.warn('[MainPage] 加载会话消息失败:', error?.message || error);
+  }
 };
 
-// ---------------- 会话与历史记录 ----------------
-const selectGrade = (grade) => { selectedGrade.value = grade; };
+/** 开启新对话：清空当前会话，首次提问保存时由服务端生成新会话ID */
+const startNewConversation = () => {
+  currentSessionId.value = '';
+  localStorage.removeItem(SESSION_KEY);
+  messages.value = [];
+  inputText.value = '';
+};
 
+/** 把当前会话全量落盘到服务器（同一天的会话归入同一个 Markdown 文件） */
+const saveHistoryToServer = async () => {
+  const payload = toPersistedHistory();
+  if (!payload.length) return;
+  try {
+    const res = await request.post('/save_history', {
+      session_id: currentSessionId.value || '',
+      history: payload
+    });
+    if (res.data?.success && res.data.session_id) {
+      if (res.data.session_id !== currentSessionId.value) {
+        currentSessionId.value = res.data.session_id;
+        localStorage.setItem(SESSION_KEY, res.data.session_id);
+      }
+      await loadSessions();
+    }
+  } catch (error) {
+    console.warn('[MainPage] 保存咨询历史失败:', error?.message || error);
+  }
+};
+
+// ---------------- 登出 ----------------
 const handleLogout = () => {
+  localStorage.removeItem(PAGE_KEY);
+  localStorage.removeItem(REVIEW_KEY);
+  localStorage.removeItem(SESSION_KEY);
   clearAuth();
   emit('logout');
 };
 
-const loadHistoryFromServer = async () => {
-  if (!getToken()) return;
-  try {
-    // Authorization 由 request.js 请求拦截器统一注入
-    const response = await request.get('/get_history');
-    if (response.data.success) {
-      const mergedHistory = mergeHistory(response.data.history, loadLocalHistory());
-      chatHistory.value = mergedHistory
-        .filter((chat) => chat.messages && chat.messages.length > 0 && isDateWithinWeek(chat.date))
-        .map((chat) => ({ ...chat, displayDate: formatDate(chat.date), reviewId: findReviewId(chat) }));
-      saveLocalHistory(chatHistory.value);
-
-      if (chatHistory.value.length > 0) {
-        const lastChat = chatHistory.value[0];
-        currentChatId.value = lastChat.id;
-        messages.value = hydrateAttachments([...lastChat.messages]);
-      } else {
-        createNewChat(true);
-      }
-    }
-  } catch (error) {
-    console.error('从服务器加载历史记录失败:', error);
-    loadLocalHistoryData();
-  }
-};
-
-const syncHistory = async () => {
-  if (!getToken()) return;
-  isSyncing.value = true;
-  try {
-    const historyToSync = chatHistory.value.map((chat) => ({
-      id: chat.id, date: chat.date, messages: chat.messages
-    }));
-    const response = await request.post('/save_history', { history: historyToSync });
-    showError(response.data.success ? '历史记录同步成功' : '同步失败');
-  } catch (error) {
-    showError('同步失败，请检查网络连接');
-  } finally {
-    isSyncing.value = false;
-  }
-};
-
-/** 从消息中提取批改 ID，用于历史条目标记与缩略图恢复 */
-const findReviewId = (chat) => {
-  const hit = (chat.messages || []).find((m) => m.reviewId);
-  return hit ? hit.reviewId : null;
-};
-
-/**
- * 历史回填：刷新页面后，附件缩略图通过批改记录的首屏图片恢复，
- * 这样“返回首页后保留附件与批改入口”在重新加载后依然成立。
- */
-const hydrateAttachments = (msgs) =>
-  msgs.map((msg) => {
-    if (msg.role !== 'user' || !msg.reviewId || !msg.attachments?.length) return msg;
-    return {
-      ...msg,
-      // 已落库的图片一律按 reviewId 重新生成地址：消息会写进 localStorage，
-      // 里面存的 blob:/旧地址在刷新后必然失效，不能直接复用。
-      attachments: msg.attachments.map((att) => (
-        att.kind === 'image'
-          ? { ...att, url: reviewPageUrl(msg.reviewId, 'page-1.jpg', currentUser.value) }
-          : att
-      ))
-    };
-  });
-
-const mergeHistory = (serverHistory, localHistory) => {
-  const merged = {};
-  localHistory.forEach((chat) => { merged[chat.id] = chat; });
-  serverHistory.forEach((chat) => { merged[chat.id] = chat; });
-  return Object.values(merged).sort((a, b) => new Date(b.date) - new Date(a.date));
-};
-
-const loadLocalHistory = () => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : [];
-  } catch (e) {
-    return [];
-  }
-};
-
-const saveLocalHistory = (history) => {
-  try {
-    const dataToSave = history.map((chat) => ({
-      id: chat.id, date: chat.date, messages: chat.messages
-    })).filter((chat) => isDateWithinWeek(chat.date)).slice(0, MAX_HISTORY);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
-  } catch (e) {
-    console.error('保存本地历史记录失败:', e);
-  }
-};
-
-const loadLocalHistoryData = () => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      chatHistory.value = JSON.parse(saved)
-        .filter((chat) => chat.messages && chat.messages.length > 0 && isDateWithinWeek(chat.date))
-        .map((chat) => ({ ...chat, displayDate: formatDate(chat.date), reviewId: findReviewId(chat) }));
-    }
-  } catch (e) {
-    chatHistory.value = [];
-  }
-};
-
-const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
-
-const isDateWithinWeek = (dateStr) => {
-  const [year, month, day] = dateStr.split('-').map(Number);
-  const date = new Date(year, month - 1, day);
-  const weekAgo = new Date();
-  weekAgo.setDate(weekAgo.getDate() - MAX_HISTORY_DAYS);
-  return date >= weekAgo;
-};
-
-const getTodayDate = () => {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  const day = now.getDate();
-  const yesterday = new Date(year, month, day - 1);
-  const pad = (n) => String(n).padStart(2, '0');
-  return {
-    todayStr: `${year}-${pad(month + 1)}-${pad(day)}`,
-    yesterdayStr: `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`
-  };
-};
-
-const formatDate = (dateStr) => {
-  const { todayStr, yesterdayStr } = getTodayDate();
-  const normalizedDate = normalizeDate(dateStr);
-  if (!normalizedDate) return dateStr;
-  if (normalizedDate === todayStr) return '今天';
-  if (normalizedDate === yesterdayStr) return '昨天';
-  const [year, month, day] = normalizedDate.split('-');
-  return `${year}/${month}/${day}`;
-};
-
-const normalizeDate = (dateStr) => {
-  if (!dateStr) return null;
-  const trimmed = dateStr.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-  return parseChineseDate(trimmed);
-};
-
-const parseChineseDate = (chineseDate) => {
-  const monthMap = { '一月': '01', '二月': '02', '三月': '03', '四月': '04', '五月': '05', '六月': '06',
-    '七月': '07', '八月': '08', '九月': '09', '十月': '10', '十一月': '11', '十二月': '12' };
-  const dayMap = {};
-  ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二', '十三', '十四', '十五',
-    '十六', '十七', '十八', '十九', '二十', '二十一', '二十二', '二十三', '二十四', '二十五', '二十六',
-    '二十七', '二十八', '二十九', '三十', '三十一'].forEach((cn, i) => { dayMap[`${cn}号`] = String(i + 1).padStart(2, '0'); });
-  const year = new Date().getFullYear();
-  for (const [monthCN, monthNum] of Object.entries(monthMap)) {
-    if (chineseDate.includes(monthCN)) {
-      for (const [dayCN, dayNum] of Object.entries(dayMap)) {
-        if (chineseDate.includes(dayCN)) return `${year}-${monthNum}-${dayNum}`;
-      }
-    }
-  }
-  return null;
-};
-
-const refreshDisplayDates = () => {
-  chatHistory.value = chatHistory.value.map((chat) => ({ ...chat, displayDate: formatDate(chat.date) }));
-};
-
-const startDateCheckTimer = () => {
-  const checkDateChange = () => {
-    const { todayStr } = getTodayDate();
-    if (lastCheckedDate && lastCheckedDate !== todayStr) refreshDisplayDates();
-    lastCheckedDate = todayStr;
-  };
-  checkDateChange();
-  dateCheckTimer = setInterval(checkDateChange, 60000);
-};
-
-const stopDateCheckTimer = () => {
-  if (dateCheckTimer) {
-    clearInterval(dateCheckTimer);
-    dateCheckTimer = null;
-  }
-};
-
-const createNewChat = (force = false) => {
-  if (!force && messages.value.length === 0 && chatHistory.value.length > 0) return currentChatId.value;
-  const id = generateId();
-  const { todayStr } = getTodayDate();
-  const existingNowIndex = chatHistory.value.findIndex((c) => c.displayDate === '现在');
-  if (existingNowIndex !== -1) chatHistory.value.splice(existingNowIndex, 1);
-  chatHistory.value.unshift({ id, date: todayStr, displayDate: '现在', isTemp: true, messages: [] });
-  currentChatId.value = id;
-  messages.value = [];
-  return id;
-};
-
-const newChat = () => {
-  if (isCreatingChat.value) return;
-  isCreatingChat.value = true;
-  try {
-    if (messages.value.length > 0) {
-      saveCurrentChat();
-      createNewChat(true);
-    } else if (chatHistory.value.length === 0) {
-      createNewChat(true);
-    }
-  } finally {
-    isCreatingChat.value = false;
-  }
-  inputText.value = '';
-  selectedGrade.value = '';
-  view.value = 'chat';
-  activeReviewId.value = null;
-};
-
-const saveCurrentChat = () => {
-  if (!currentChatId.value || messages.value.length === 0) return;
-  const chatIndex = chatHistory.value.findIndex((c) => c.id === currentChatId.value);
-  if (chatIndex !== -1) {
-    chatHistory.value[chatIndex].messages = [...messages.value];
-    chatHistory.value[chatIndex].displayDate = formatDate(chatHistory.value[chatIndex].date);
-    chatHistory.value[chatIndex].reviewId = findReviewId(chatHistory.value[chatIndex]);
-    saveHistory();
-    if (currentUser.value) syncHistory();
-  }
-};
-
-const loadChat = (chatId) => {
-  if (currentChatId.value === chatId) { view.value = 'chat'; return; }
-  saveCurrentChat();
-  const chat = chatHistory.value.find((c) => c.id === chatId);
-  if (chat) {
-    currentChatId.value = chatId;
-    messages.value = hydrateAttachments([...chat.messages]);
-    view.value = 'chat';
-    activeReviewId.value = null;
-  }
-};
-
-const saveHistory = () => {
-  try {
-    let dataToSave = chatHistory.value.map((chat) => ({ id: chat.id, date: chat.date, messages: chat.messages }));
-    dataToSave = dataToSave.filter((chat) => isDateWithinWeek(chat.date) && chat.messages.length > 0);
-    if (dataToSave.length > MAX_HISTORY) dataToSave = dataToSave.slice(0, MAX_HISTORY);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
-  } catch (e) {
-    console.error('保存历史记录失败:', e);
-  }
-};
-
-// ---------------- 生命周期 ----------------
-onMounted(() => {
-  currentUser.value = getUser();
-  const token = getToken();
-  if (token) {
-    verifyTokenAndLoad(token);
-  } else {
-    loadLocalHistoryData();
-    startDateCheckTimer();
-    if (chatHistory.value.length === 0) {
-      createNewChat(true);
-    } else {
-      const lastChat = chatHistory.value[0];
-      currentChatId.value = lastChat.id;
-      messages.value = hydrateAttachments([...lastChat.messages]);
-    }
-  }
-});
-
-onUnmounted(() => {
-  stopDateCheckTimer();
-  pollTimers.forEach((timer) => clearInterval(timer));
-  pollTimers.clear();
-});
-
-const verifyTokenAndLoad = async (token) => {
-  try {
-    // Authorization 由 request.js 请求拦截器统一注入
-    const response = await request.get('/get_history');
-    if (response.data.success) {
-      const decoded = parseJwt(token);
-      currentUser.value = decoded.username || getUser() || '';
-      await loadHistoryFromServer();
-      startDateCheckTimer();
-    } else {
-      clearAuth();
-    }
-  } catch (error) {
-    clearAuth();
-    loadLocalHistoryData();
-    startDateCheckTimer();
-    if (chatHistory.value.length === 0) {
-      createNewChat(true);
-    } else {
-      const lastChat = chatHistory.value[0];
-      currentChatId.value = lastChat.id;
-      messages.value = hydrateAttachments([...lastChat.messages]);
-    }
-  }
-};
-
 const previewImageFull = (imageUrl) => { fullscreenImage.value = imageUrl; };
 const closeFullscreenImage = () => { fullscreenImage.value = null; };
+
+onMounted(async () => {
+  // 先取最近 7 天的会话列表，再打开「上次浏览的会话」；
+  // 该会话已被删除或不在展示窗口内时，退回最近一个会话，避免白屏
+  const list = await loadSessions();
+  const savedSessionId = localStorage.getItem(SESSION_KEY) || '';
+  const target = list.find((s) => s.session_id === savedSessionId) || list[0];
+  if (target) {
+    await openSession(target);
+  } else {
+    currentSessionId.value = '';
+    localStorage.removeItem(SESSION_KEY);
+  }
+});
 </script>
 
 <style scoped>
-/* 批改页需要占满剩余空间，且自身管理滚动 */
-.main-content > :deep(.review-workbench) { flex: 1; min-height: 0; }
+.app-shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
-/* 批改结果页不显示侧边栏时，主内容区占满并去掉左侧留白 */
-.main-page.reviewing { overflow: hidden; }
-.main-page.reviewing .main-content { padding-left: 0; padding-top: 0; }
-
-.history-item {
+/* 顶部导航栏 */
+.app-navbar {
+  height: var(--app-navbar-height);
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  gap: 24px;
+  padding: 0 20px;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
 }
-.history-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.navbar-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--c-text); }
+.brand-logo { display: grid; place-items: center; width: 32px; height: 32px; color: #fff; background: var(--c-primary); border-radius: var(--r-md); }
+.navbar-user { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.user-avatar { display: grid; place-items: center; width: 28px; height: 28px; font-size: var(--fs-sm); font-weight: 600; color: #fff; background: var(--c-primary); border-radius: 50%; }
+.user-name { font-size: var(--fs-sm); color: var(--c-text); }
+.logout-btn { padding: 5px 12px; font-family: inherit; font-size: var(--fs-xs); border: 1px solid var(--c-border); border-radius: var(--r-md); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
+.logout-btn:hover { color: var(--c-error); border-color: var(--c-error); }
+
+/* 主体：侧边栏 + 内容 */
+.app-body { flex: 1; display: flex; min-height: 0; }
+
+.app-sidebar {
+  width: var(--app-sidebar-width);
+  flex-shrink: 0;
+  padding: 12px;
+  background: var(--c-bg-subtle);
+  border-right: 1px solid var(--c-border);
+  overflow-y: auto;
+}
+.sidebar-nav { display: flex; flex-direction: column; gap: 4px; }
+.side-btn {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  font-family: inherit; font-size: var(--fs-md);
+  border: none; border-radius: var(--r-md);
+  background: transparent; color: var(--c-text-secondary);
+  cursor: pointer; text-align: left;
+}
+.side-btn:hover { color: var(--c-text); background: var(--c-bg-muted); }
+.side-btn.is-active { color: var(--c-primary); background: var(--c-primary-soft); font-weight: 600; }
+
+/* 导航项下挂的子列表（作文列表 / 会话记录）：缩进并限制高度，避免挤压其它导航项 */
+.side-sub { margin: 2px 0 8px; padding-left: 6px; }
+.side-sub .history-section { flex: none; max-height: 46vh; overflow-y: auto; }
+
+.app-main { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.app-main > :deep(.consult-page) { height: 100%; display: flex; flex-direction: column; }
+.app-main > :deep(.review-workbench) { height: 100%; }
+.app-main > :deep(.submit-page),
+.app-main > :deep(.report-page) { height: 100%; }
+
+/* AI 咨询：会话列表已移到全局侧边栏，内容区只保留对话与输入框 */
+.consult-page { background: var(--c-bg); }
+.new-chat-btn {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; padding: 9px 12px; margin-bottom: 8px;
+  font-family: inherit; font-size: var(--fs-sm); font-weight: 600;
+  color: var(--c-primary); background: var(--c-surface);
+  border: 1px solid var(--c-border-strong); border-radius: var(--r-md);
+  cursor: pointer; flex-shrink: 0;
+}
+.new-chat-btn:hover { background: var(--c-primary-soft); border-color: var(--c-primary); }
+/* 会话条目：时间戳在上，标题在下 */
+.history-item { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.history-item-time {
+  font-size: 11px; font-variant-numeric: tabular-nums; color: var(--c-text-muted);
+}
+.history-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-item.active .history-item-time { color: var(--c-primary); }
+.consult-hint { padding: 12px 4px; font-size: var(--fs-sm); color: var(--c-text-muted); }
+
+.consult-page :deep(.chat-history) { min-width: 0; }
+.consult-input { display: flex; gap: 8px; padding: 12px 16px; background: var(--c-surface); border-top: 1px solid var(--c-border); flex-shrink: 0; }
+.consult-text { flex: 1; }
+.send-btn { width: 44px; flex-shrink: 0; }
+
+.error-toast {
+  position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 16px; font-size: var(--fs-sm); color: #fff;
+  background: rgba(32, 33, 36, .9); border-radius: var(--r-pill); z-index: 4000;
+}
+.error-icon { color: #f5b301; }
+.error-close { border: none; background: none; color: #fff; font-size: 16px; cursor: pointer; line-height: 1; }
+
+.fullscreen-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .75); display: grid; place-items: center; z-index: 5000; }
+.fullscreen-content { position: relative; max-width: 90vw; max-height: 90vh; }
+.fullscreen-img { max-width: 90vw; max-height: 90vh; border-radius: var(--r-md); }
+.fullscreen-close { position: absolute; top: -14px; right: -14px; width: 30px; height: 30px; border: none; border-radius: 50%; background: #fff; font-size: 16px; cursor: pointer; }
+
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>

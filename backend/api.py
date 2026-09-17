@@ -25,7 +25,7 @@ from utils.win_env import load as _load_win_env
 # 环境变量，这里从注册表补齐 DASHSCOPE / 阿里云 OCR 凭据，避免误报“未配置”。
 _load_win_env()
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 from agent.tools.react_agent import ReactAgent
 from agent.tools.agent_tools import rag_summarize
@@ -41,7 +41,7 @@ from model.factory import chat_model, is_model_initialized
 from utils.error_handler import ServiceUnavailableError
 from utils.standard_loader import load_unified_standard
 from utils.text_classifier import classify_text, is_essay_submission as classifier_is_essay, detect_essay_type as classifier_detect_type
-from services.consultation_service import answer_consultation
+from services.consultation_service import answer_consultation, stream_answer_consultation
 from services import consult_context
 from services import user_service
 from utils.chat_memory import normalize_history
@@ -246,7 +246,8 @@ def token_required(f):
             token = token.replace('Bearer ', '')
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
             current_user = data['username']
-            if current_user not in USERS:
+            # 用户校验改为查 PostgreSQL users 表（旧的 USERS 内存字典已废弃未定义）
+            if not user_service.get_user_by_account(current_user):
                 raise Exception('用户不存在')
         except Exception as e:
             return jsonify({'success': False, 'error': '令牌无效'}), 401
@@ -1243,6 +1244,10 @@ def chat():
     # 对话记忆：前端传来的本会话最近轮次。
     # 服务端强制重新裁剪（轮次上限、单条长度、合计长度），不信任前端传的规模。
     history = normalize_history(data.get('history'))
+    if not history:
+        # 前端未携带上下文时，回退到服务端持久化的咨询记录（按天 Markdown 中最近一次会话），
+        # 保证刷新页面或更换设备后 AI 仍能续接前文
+        history = normalize_history(latest_session_messages(get_request_username()))
 
     # 咨询检索范围：role 决定"我"能否解析为学生本人，student 用于老师端显式指定学生。
     # 两者都只是**意图声明**，不是安全边界——真正的数据隔离由 owner（X-Username）
@@ -1274,6 +1279,13 @@ def chat():
     try:
         # 使用新的文本分类器判断文本类型
         text_type, detected_essay_type = classify_text(message)
+
+        # 前端 AI 咨询页会显式声明 type='consultation'，这里以显式声明为准：
+        # 分类器对自由提问（如「1」「为什么我总写不长」）常判为 unknown，
+        # 若不纠正就会掉出下面的流式分支，退化成一次性返回的非流式回答（前端一直等，感觉很慢）。
+        # 仅在分类器未判定为作文时才纠正，避免用户粘贴作文正文时被误当作咨询。
+        if (data.get('type') or '').strip().lower() == 'consultation' and text_type != 'essay':
+            text_type = 'consultation'
         
         # 记录用户输入日志
         log_user_input(current_user, message, user_selected_essay_type, text_type == 'essay')
@@ -1310,6 +1322,22 @@ def chat():
             parsed['essayType'] = parsed.get('essay_type', essay_type)
             parsed['response_type'] = 'essay_review'
         elif text_type == 'consultation':
+            # 前端请求流式输出时（stream=true），咨询回答按 SSE 逐 token 增量推送
+            if data.get('stream') is True:
+                def _consult_stream():
+                    """把流式咨询事件编码为 SSE 帧，交给前端增量渲染。"""
+                    for evt in stream_answer_consultation(
+                            message, history, owner=current_user, role=role, student=student_hint):
+                        yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+                    # 兜底保证「结束」信号一定送达（事件流若出错前已收尾，这里不重复发已发过的 done）
+                    yield "data: {\"type\":\"done\"}\n\n"
+
+                sse_resp = Response(_consult_stream(), mimetype='text/event-stream')
+                sse_resp.headers['Cache-Control'] = 'no-cache'
+                sse_resp.headers['X-Accel-Buffering'] = 'no'
+                sse_resp.headers['Connection'] = 'keep-alive'
+                return sse_resp
+
             # 咨询类问题，使用新的咨询服务（携带本会话最近的对话轮次与学情检索范围）
             consult_result = answer_consultation(message, history,
                                                  owner=current_user, role=role, student=student_hint)
@@ -1471,58 +1499,620 @@ def login():
         return jsonify({'success': False, 'error': '数据库不可用，请稍后重试'}), 503
 
 
+def history_day_path(username, date_str):
+    """
+    获取「某用户某一天」的咨询记录文件路径
+
+    参数：
+        username: string - 用户名
+        date_str: string - 'YYYY-MM-DD'
+
+    返回：
+        string - 天级 Markdown 文件路径（{username}_consult_{date}.md）
+    """
+    return os.path.join(HISTORY_DIR, f'{username}_consult_{date_str}.md')
+
+
 def get_user_history_path(username):
     """
-    获取用户历史记录文件路径
-    
+    获取**早期用户级**历史文件路径（仅供旧数据迁移使用）
+
     参数：
         username: string - 用户名
-        
+
     返回：
-        string - 历史记录文件路径
+        string - 旧版用户级 Markdown 文件路径（{username}_consult_history.md）
     """
-    return os.path.join(HISTORY_DIR, f'{username}_history.json')
+    # 咨询记录以 Markdown 落盘：既方便人工查看，也便于作为 AI 回答时的前文上下文
+    return os.path.join(HISTORY_DIR, f'{username}_consult_history.md')
 
 
-def load_user_history(username):
+def format_history_time(value):
     """
-    加载用户历史记录
-    
+    把毫秒时间戳格式化为可读时间
+
+    参数：
+        value: 毫秒时间戳（前端 Date.now()），缺省或非法时用当前时间
+
+    返回：
+        string - 'YYYY-MM-DD HH:MM:SS'
+    """
+    try:
+        seconds = float(value) / 1000 if value else time.time()
+    except (TypeError, ValueError):
+        seconds = time.time()
+    return datetime.fromtimestamp(seconds).strftime('%Y-%m-%d %H:%M:%S')
+
+
+# ============================================================================
+# 咨询会话历史存储（按天 + 会话级 Markdown）
+# ----------------------------------------------------------------------------
+# 文件：backend/history/{username}_consult_{YYYY-MM-DD}.md
+#   —— 同一用户、同一天的所有会话写在同一个 Markdown 文件里；
+#      每个会话用 '## 会话 · HH:MM:SS' 分节，会话内每条消息用
+#      '### 用户/AI 批改老师 · YYYY-MM-DD HH:MM:SS' 分节。
+# 这样既方便人工直接查阅，也能被后端稳定反解析回消息列表，
+# 作为 AI 回答用户问题时的前文上下文。
+# ============================================================================
+
+# 会话ID：'{日期}_{时分秒}'，同时决定了会话归属哪一天的文件
+SESSION_ID_FORMAT = '%Y-%m-%d_%H%M%S'
+# 会话列表默认展示最近 7 天（含今天）
+CONSULT_RETENTION_DAYS = 7
+# 单次保存的最大消息条数，防止异常超长写入
+MAX_SESSION_MESSAGES = 200
+
+# 天级文件名：'13727575721_consult_2026-09-17.md'
+DAY_FILE_PATTERN = re.compile(r'^(.+)_consult_(\d{4}-\d{2}-\d{2})\.md$')
+# 会话标题行：'## 会话 · 09:31:07'
+SESSION_HEAD_PATTERN = re.compile(r'^##[ \t]*会话[ \t]*·[ \t]*([^\n]*)$', re.MULTILINE)
+# 会话ID行：'- 会话ID：2026-09-17_093107'
+SESSION_ID_PATTERN = re.compile(r'^[ \t]*-[ \t]*会话ID[：:][ \t]*(\S+)[ \t]*$', re.MULTILINE)
+# 消息标题行：'### 用户 · 2026-09-17 17:20:48'
+MESSAGE_HEAD_PATTERN = re.compile(r'^###[ \t]*(用户|AI 批改老师)[ \t]*·[ \t]*([^\n]*)$', re.MULTILINE)
+
+
+def session_time_label(session_id):
+    """
+    从会话ID中取出 'HH:MM:SS' 时间标签（侧边栏展示用）
+
+    参数：
+        session_id: string - 形如 '2026-09-17_093107'
+
+    返回：
+        string - 'HH:MM:SS'；格式不符时返回空串（由调用方用日期兜底）
+    """
+    parts = str(session_id or '').split('_')
+    raw = parts[1][:6] if len(parts) >= 2 else ''
+    if len(raw) == 6 and raw.isdigit():
+        return f'{raw[0:2]}:{raw[2:4]}:{raw[4:6]}'
+    return ''
+
+
+def parse_messages(block):
+    """
+    从一段 Markdown 文本中提取所有消息（不区分会话层级）
+
+    参数：
+        block: string - 任意 Markdown 片段
+
+    返回：
+        list - [{'role': str, 'content': str, 'time': str}, ...]
+    """
+    messages = []
+    matches = list(MESSAGE_HEAD_PATTERN.finditer(block))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(block)
+        content = block[match.end():end].strip()
+        if not content:
+            continue
+        messages.append({
+            'role': 'user' if match.group(1) == '用户' else 'assistant',
+            'content': content,
+            'time': match.group(2).strip(),
+        })
+    return messages
+
+
+def parse_day_markdown(text):
+    """
+    把一天的 Markdown 文档还原为会话列表（与 render_day_markdown 对称）
+
+    参数：
+        text: string - 一天的 Markdown 文档内容
+
+    返回：
+        list - [{'session_id': str, 'time': str, 'messages': [...]}, ...]（按文件内顺序）
+    """
+    sessions = []
+    heads = list(SESSION_HEAD_PATTERN.finditer(text))
+    for index, head in enumerate(heads):
+        end = heads[index + 1].start() if index + 1 < len(heads) else len(text)
+        block = text[head.end():end]
+        id_match = SESSION_ID_PATTERN.search(block)
+        # 老文件可能没有显式会话ID行，用标题里的时间兜底，保证不会丢会话
+        session_id = id_match.group(1) if id_match else head.group(1).strip()
+        sessions.append({
+            'session_id': session_id,
+            'time': head.group(1).strip(),
+            'messages': parse_messages(block),
+        })
+    return sessions
+
+
+def render_day_markdown(username, date_str, sessions):
+    """
+    把某一天的会话列表渲染为 Markdown 文档（与 parse_day_markdown 对称）
+
     参数：
         username: string - 用户名
-        
+        date_str: string - 'YYYY-MM-DD'
+        sessions: list - [{'session_id': str, 'time': str, 'messages': [...]}, ...]
+
     返回：
-        list - 用户历史记录列表
+        string - Markdown 文档内容
     """
-    history_path = get_user_history_path(username)
-    if os.path.exists(history_path):
+    lines = [
+        f'# AI 咨询对话记录 · {date_str}',
+        '',
+        f'- 用户：{username}',
+        f'- 日期：{date_str}',
+        f'- 会话数：{len(sessions)}',
+        '',
+        '> 本文件由系统自动维护，保存用户与 AI 批改老师的咨询对话，供后续问答调用前文上下文。',
+        '',
+        '---',
+        '',
+    ]
+    for session in sessions:
+        label = session.get('time') or session_time_label(session.get('session_id'))
+        lines.append(f'## 会话 · {label}')
+        lines.append('')
+        lines.append(f'- 会话ID：{session.get("session_id")}')
+        lines.append('')
+        for item in session.get('messages') or []:
+            content = (item.get('content') or '').strip()
+            if not content:
+                continue
+            role = '用户' if item.get('role') == 'user' else 'AI 批改老师'
+            stamp = item.get('time') or format_history_time(item.get('timestamp'))
+            lines.append(f'### {role} · {stamp}')
+            lines.append('')
+            lines.append(content)
+            lines.append('')
+    return '\n'.join(lines)
+
+
+def _normalize_messages(history):
+    """
+    把前端/旧文件传来的消息列表清洗为落盘格式
+
+    参数：
+        history: list - [{'role', 'content', 'time'|'timestamp'}]
+
+    返回：
+        list - [{'role': 'user'|'assistant', 'content': str, 'time': 'YYYY-MM-DD HH:MM:SS'}]
+    """
+    messages = []
+    for item in (history or [])[:MAX_SESSION_MESSAGES]:
+        if not isinstance(item, dict):
+            continue
+        if item.get('role') not in ('user', 'assistant'):
+            continue
+        content = (item.get('content') or '').strip()
+        if not content:
+            continue
+        messages.append({
+            'role': item['role'],
+            'content': content,
+            'time': item.get('time') or format_history_time(item.get('timestamp')),
+        })
+    return messages
+
+
+def _read_day_sessions(username, date_str):
+    """
+    读取某一天的会话列表（文件不存在或损坏时返回空列表，不抛异常）
+
+    参数：
+        username: string - 用户名
+        date_str: string - 'YYYY-MM-DD'
+
+    返回：
+        list - 会话列表
+    """
+    path = history_day_path(username, date_str)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return parse_day_markdown(f.read())
+    except Exception as e:
+        logger.error(f"读取咨询记录失败({path}): {e}")
+        return []
+
+
+def _write_day_sessions(username, date_str, sessions):
+    """
+    把会话列表写回某一天的 Markdown 文件
+
+    参数：
+        username: string - 用户名
+        date_str: string - 'YYYY-MM-DD'
+        sessions: list - 会话列表
+
+    返回：
+        boolean - 是否写入成功
+    """
+    path = history_day_path(username, date_str)
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(render_day_markdown(username, date_str, sessions))
+        return True
+    except Exception as e:
+        logger.error(f"保存咨询记录失败({path}): {e}")
+        return False
+
+
+def _session_moment(messages, date_hint, fallback):
+    """
+    推断旧会话的归属时间：首条消息时间 > 记录自带日期 > 文件修改时间
+
+    参数：
+        messages: list - 已清洗的消息列表（time 为 'YYYY-MM-DD HH:MM:SS'）
+        date_hint: string - 旧记录自带的日期（'YYYY-MM-DD'），可为空
+        fallback: datetime - 兜底时间（通常是旧文件的 mtime）
+
+    返回：
+        datetime - 会话归属时间
+    """
+    candidates = (
+        ((messages[0].get('time') if messages else '') or '', '%Y-%m-%d %H:%M:%S'),
+        (date_hint or '', '%Y-%m-%d'),
+    )
+    for text, fmt in candidates:
+        if not text:
+            continue
         try:
-            with open(history_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return fallback
+
+
+def _extract_legacy_sessions(text, is_json):
+    """
+    解析旧版历史文件的内容，得到若干「会话」
+
+    参数：
+        text: string - 旧文件内容
+        is_json: boolean - 是否为 JSON 文件
+
+    返回：
+        list - [(messages, date_hint), ...]；无所获时返回空列表
+    """
+    if not is_json:
+        # 用户级 Markdown：整份文件视为一个会话
+        messages = _normalize_messages(parse_messages(text))
+        return [(messages, '')] if messages else []
+
+    try:
+        raw = json.loads(text)
+    except (TypeError, ValueError) as e:
+        logger.error(f"旧版历史文件 JSON 解析失败: {e}")
+        return []
+    if not isinstance(raw, list):
+        return []
+
+    # 结构一：会话列表 —— [{'id', 'date', 'messages': [{'role','content','timestamp'}, ...]}]
+    sessions = []
+    for chat in raw:
+        if not isinstance(chat, dict) or not isinstance(chat.get('messages'), list):
+            continue
+        messages = _normalize_messages(chat['messages'])
+        if messages:
+            sessions.append((messages, chat.get('date') or ''))
+    if sessions:
+        return sessions
+
+    # 结构二：扁平消息列表 —— [{'role','content','timestamp'}, ...]，整份文件视为一个会话
+    messages = _normalize_messages(raw)
+    return [(messages, '')] if messages else []
+
+
+def _free_session_id(username, moment):
+    """
+    由时间生成未被占用的会话ID（同秒冲突时顺延，避免覆盖已有会话）
+
+    参数：
+        username: string - 用户名
+        moment: datetime - 期望的会话时间
+
+    返回：
+        string - 可用的会话ID
+    """
+    session_id = moment.strftime(SESSION_ID_FORMAT)
+    while load_session(username, session_id):
+        moment += timedelta(seconds=1)
+        session_id = moment.strftime(SESSION_ID_FORMAT)
+    return session_id
+
+
+def _migrate_legacy_history(username):
+    """
+    把早期「用户级」历史懒迁移为「按天 + 会话级」结构
+
+    兼容两种旧文件：
+        - {username}_consult_history.md：用户级 Markdown（无会话分节）
+        - {username}_history.json：更早的 JSON（会话列表或扁平消息列表）
+
+    安全约定：只有成功解析出消息并落盘后才删除旧文件；
+    解析不出内容时**保留原文件**，避免误删用户数据。
+
+    参数：
+        username: string - 用户名
+
+    返回：
+        None
+    """
+    legacy_files = (
+        (get_user_history_path(username), False),
+        (os.path.join(HISTORY_DIR, f'{username}_history.json'), True),
+    )
+
+    for legacy_path, is_json in legacy_files:
+        if not os.path.exists(legacy_path):
+            continue
+        try:
+            with open(legacy_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+        except OSError as e:
+            logger.error(f"读取旧版历史文件失败({legacy_path}): {e}")
+            continue
+
+        if not text.strip():
+            _remove_legacy_file(legacy_path)
+            continue
+
+        fallback = datetime.fromtimestamp(os.path.getmtime(legacy_path))
+        sessions = _extract_legacy_sessions(text, is_json)
+        if not sessions:
+            logger.warning(f"[咨询历史] 未能从旧文件解析出消息，已保留原文件: {os.path.basename(legacy_path)}")
+            continue
+
+        try:
+            for messages, date_hint in sessions:
+                moment = _session_moment(messages, date_hint, fallback)
+                save_session(username, _free_session_id(username, moment), messages)
         except Exception as e:
-            logger.error(f"加载用户历史记录失败: {e}")
+            logger.error(f"迁移旧版历史文件失败({legacy_path}): {e}")
+            continue
+
+        _remove_legacy_file(legacy_path)
+        logger.info(f"[咨询历史] 已迁移旧版历史文件: {os.path.basename(legacy_path)}")
+
+
+def _remove_legacy_file(path):
+    """
+    删除迁移完成的旧文件（失败仅记日志，不影响主流程）
+
+    参数：
+        path: string - 旧文件路径
+
+    返回：
+        None
+    """
+    try:
+        os.remove(path)
+    except OSError as e:
+        logger.error(f"删除旧版历史文件失败({path}): {e}")
+
+
+def list_user_sessions(username, days=CONSULT_RETENTION_DAYS):
+    """
+    列出用户最近 N 天（含今天）的会话摘要，按时间倒序排列
+
+    参数：
+        username: string - 用户名
+        days: int - 展示天数，默认 7（当天 + 往前 6 天）
+
+    返回：
+        list - [{'session_id', 'date', 'time', 'title', 'message_count', 'updated_at'}, ...]
+    """
+    _migrate_legacy_history(username)
+
+    today = datetime.now().date()
+    allowed_dates = {
+        (today - timedelta(days=offset)).strftime('%Y-%m-%d')
+        for offset in range(max(1, days))
+    }
+
+    sessions = []
+    try:
+        entries = os.listdir(HISTORY_DIR)
+    except OSError as e:
+        logger.error(f"读取历史目录失败: {e}")
+        return []
+
+    for entry in entries:
+        matched = DAY_FILE_PATTERN.match(entry)
+        # 只取「当前用户、且日期落在展示窗口内」的天级文件，超过 7 天的直接不展示（文件保留）
+        if not matched or matched.group(1) != username:
+            continue
+        date_str = matched.group(2)
+        if date_str not in allowed_dates:
+            continue
+        for session in _read_day_sessions(username, date_str):
+            messages = session.get('messages') or []
+            if not messages:
+                continue
+            first_question = next((m['content'] for m in messages if m['role'] == 'user'), '')
+            title = (first_question.strip().splitlines() or [''])[0].strip()
+            sessions.append({
+                'session_id': session['session_id'],
+                'date': date_str,
+                'time': session.get('time') or session_time_label(session['session_id']),
+                'label': session_time_label(session['session_id']),
+                'title': title[:24] or '新对话',
+                'message_count': len(messages),
+                'updated_at': messages[-1].get('time') or '',
+            })
+
+    sessions.sort(key=lambda item: (item['date'], item['label']), reverse=True)
+    return sessions
+
+
+def load_session(username, session_id):
+    """
+    加载指定会话的消息列表
+
+    参数：
+        username: string - 用户名
+        session_id: string - 会话ID（形如 '2026-09-17_093107'）
+
+    返回：
+        list - [{'role', 'content', 'time'}, ...]；会话不存在时返回空列表
+    """
+    date_str = str(session_id or '').split('_')[0]
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        return []
+    for session in _read_day_sessions(username, date_str):
+        if session['session_id'] == session_id:
+            return session['messages']
     return []
 
 
-def save_user_history(username, history):
+def latest_session_messages(username):
     """
-    保存用户历史记录
-    
+    取用户最近一个会话的消息列表（供 AI 续接前文使用）
+
     参数：
         username: string - 用户名
-        history: list - 历史记录列表
-        
+
     返回：
-        boolean - 保存是否成功
+        list - 消息列表；无历史时返回空列表
     """
-    history_path = get_user_history_path(username)
-    try:
-        with open(history_path, 'w', encoding='utf-8') as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception as e:
-        logger.error(f"保存用户历史记录失败: {e}")
+    sessions = list_user_sessions(username)
+    if not sessions:
+        return []
+    return load_session(username, sessions[0]['session_id'])
+
+
+def save_session(username, session_id, history):
+    """
+    保存一个会话（同一天的所有会话共用同一个 Markdown 文件）
+
+    参数：
+        username: string - 用户名
+        session_id: string - 会话ID；为空时按当前时间新建会话
+        history: list - 该会话完整消息列表
+
+    返回：
+        dict|None - {'session_id': str, 'date': 'YYYY-MM-DD'}；保存失败返回 None
+    """
+    now = datetime.now()
+    session_id = (session_id or '').strip()
+    date_str = str(session_id).split('_')[0] if session_id else ''
+    # 会话ID非法时退回当天新会话，避免把数据写进错误的天级文件
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        session_id = now.strftime(SESSION_ID_FORMAT)
+        date_str = session_id.split('_')[0]
+
+    messages = _normalize_messages(history)
+    sessions = _read_day_sessions(username, date_str)
+    label = session_time_label(session_id) or now.strftime('%H:%M:%S')
+
+    for session in sessions:
+        if session['session_id'] == session_id:
+            session['messages'] = messages
+            session['time'] = label
+            break
+    else:
+        sessions.append({'session_id': session_id, 'time': label, 'messages': messages})
+
+    if not _write_day_sessions(username, date_str, sessions):
+        return None
+    return {'session_id': session_id, 'date': date_str}
+
+
+def delete_session(username, session_id):
+    """
+    删除指定会话（当天没有其它会话时一并删除天级文件）
+
+    参数：
+        username: string - 用户名
+        session_id: string - 会话ID
+
+    返回：
+        boolean - 是否删除成功
+    """
+    date_str = str(session_id or '').split('_')[0]
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
         return False
+
+    sessions = _read_day_sessions(username, date_str)
+    kept = [session for session in sessions if session['session_id'] != session_id]
+    if len(kept) == len(sessions):
+        return False
+
+    if not kept:
+        try:
+            os.remove(history_day_path(username, date_str))
+            return True
+        except OSError as e:
+            logger.error(f"删除咨询记录文件失败: {e}")
+            return False
+    return _write_day_sessions(username, date_str, kept)
+
+
+def delete_all_sessions(username):
+    """
+    删除该用户的全部咨询记录文件（仅在用户显式请求「清空」时调用）
+
+    参数：
+        username: string - 用户名
+
+    返回：
+        int - 实际删除的文件数
+    """
+    removed = 0
+    try:
+        entries = os.listdir(HISTORY_DIR)
+    except OSError as e:
+        logger.error(f"读取历史目录失败: {e}")
+        return 0
+    for entry in entries:
+        matched = DAY_FILE_PATTERN.match(entry)
+        if not matched or matched.group(1) != username:
+            continue
+        try:
+            os.remove(os.path.join(HISTORY_DIR, entry))
+            removed += 1
+        except OSError as e:
+            logger.error(f"删除咨询记录文件失败({entry}): {e}")
+    return removed
+
+
+@app.route('/get_history/list', methods=['GET'])
+@token_required
+def get_history_list(current_user):
+    """
+    会话列表接口（仅返回最近 N 天、含今天的会话）
+
+    查询参数（可选）：days - 展示天数，默认 7
+    返回: {"success": true, "days": 7, "sessions": [...]}
+    """
+    try:
+        days = int(request.args.get('days') or CONSULT_RETENTION_DAYS)
+    except (TypeError, ValueError):
+        days = CONSULT_RETENTION_DAYS
+    days = max(1, min(days, 30))
+
+    return jsonify({
+        'success': True,
+        'days': days,
+        'sessions': list_user_sessions(current_user, days=days)
+    })
 
 
 @app.route('/save_history', methods=['POST'])
@@ -1530,22 +2120,28 @@ def save_user_history(username, history):
 def save_history(current_user):
     """
     保存历史记录接口
-    将用户的聊天历史保存到服务器
-    
-    请求体: {"history": [...]}
-    返回: {"success": true, "message": "保存成功"}
+    将一次会话的全部消息写入「该用户当天」的 Markdown 文件
+
+    请求体: {"session_id": "2026-09-17_093107"（可选，缺省则新建会话）, "history": [...]}
+    返回: {"success": true, "session_id": "...", "date": "YYYY-MM-DD"}
     """
-    data = request.json
-    history = data.get('history', [])
-    
-    # 限制最多100条记录
-    history = history[:100]
-    
-    success = save_user_history(current_user, history)
-    
+    data = get_json_body()
+    if data is None:
+        return json_error('请求数据格式错误', '请求体必须是JSON对象')
+
+    history = data.get('history')
+    if history is not None and not isinstance(history, list):
+        return json_error('请求数据格式错误', 'history 必须是数组')
+
+    saved = save_session(current_user, data.get('session_id'), history or [])
+    if not saved:
+        return jsonify({'success': False, 'message': '保存失败'}), 500
+
     return jsonify({
-        'success': success,
-        'message': '保存成功' if success else '保存失败'
+        'success': True,
+        'message': '保存成功',
+        'session_id': saved['session_id'],
+        'date': saved['date']
     })
 
 
@@ -1554,14 +2150,19 @@ def save_history(current_user):
 def get_history(current_user):
     """
     获取历史记录接口
-    返回用户的聊天历史
-    
-    返回: {"success": true, "history": [...]}
+
+    查询参数（可选）：session_id - 指定会话；缺省时返回最近一个会话
+    返回: {"success": true, "session_id": "...", "history": [...]}
     """
-    history = load_user_history(current_user)
+    session_id = (request.args.get('session_id') or '').strip()
+    if not session_id:
+        sessions = list_user_sessions(current_user)
+        session_id = sessions[0]['session_id'] if sessions else ''
+
     return jsonify({
         'success': True,
-        'history': history
+        'session_id': session_id,
+        'history': load_session(current_user, session_id) if session_id else []
     })
 
 
@@ -1570,24 +2171,23 @@ def get_history(current_user):
 def delete_history(current_user):
     """
     删除历史记录接口
-    删除指定聊天记录或全部记录
-    
-    请求体: {"chat_id": "xxx"} 或 {"all": true}
+
+    请求体: {"session_id": "xxx"} 删除单个会话；{"all": true} 删除该用户全部会话
     返回: {"success": true, "message": "删除成功"}
     """
-    data = request.json
-    chat_id = data.get('chat_id')
-    delete_all = data.get('all', False)
-    
-    history = load_user_history(current_user)
-    
-    if delete_all:
-        history = []
-    elif chat_id:
-        history = [chat for chat in history if chat.get('id') != chat_id]
-    
-    success = save_user_history(current_user, history)
-    
+    data = get_json_body()
+    if data is None:
+        return json_error('请求数据格式错误', '请求体必须是JSON对象')
+
+    if data.get('all'):
+        delete_all_sessions(current_user)
+        return jsonify({'success': True, 'message': '删除成功'})
+
+    session_id = (data.get('session_id') or '').strip()
+    if not session_id:
+        return json_error('参数缺失', '请提供 session_id 或 all=true')
+
+    success = delete_session(current_user, session_id)
     return jsonify({
         'success': success,
         'message': '删除成功' if success else '删除失败'

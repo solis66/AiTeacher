@@ -31,6 +31,7 @@
 """
 
 import json
+import os
 import sqlite3
 import threading
 from pathlib import Path
@@ -47,6 +48,39 @@ DEFAULT_K = int(_CONSULT.get('k_cases', 6))
 # 兜底阈值与 config/chroma.yaml 的 consult.score_threshold 保持一致（0.20 为实测标定值）
 DEFAULT_THRESHOLD = float(_CONSULT.get('score_threshold', 0.20))
 MAX_REVIEWS = int(_CONSULT.get('case_max_reviews', 500))
+
+
+def _canonical_dim(dim) -> str:
+    """把保存的维度名归一化为固定五维中文名（需求 D1）。
+
+    历史/异常数据里维度 name 可能是数字下标（0~4）或未知名，这里统一归并：
+    - 已是我们五维中文名 → 直接保留；
+    - 数字下标（0~4）→ 按固定顺序映射到对应维度；
+    - 其余未知名称 → 丢弃，避免把下标/乱码当作维度名展示。
+    """
+    from utils.essay_constants import UNIFIED_DIMENSIONS
+    if not isinstance(dim, dict):
+        return ''
+    name = dim.get('name')
+    if not name or not str(name).strip():
+        return ''
+    name = str(name).strip()
+    if name in UNIFIED_DIMENSIONS:
+        return name
+    if name.isdigit() and 0 <= int(name) < len(UNIFIED_DIMENSIONS):
+        return UNIFIED_DIMENSIONS[int(name)]
+    return ''
+
+# 学情注入的「最近 N 篇」篇数（需求 D3，可配置，默认 3）。
+# 优先级：环境变量 MOST_RECENT_ESSAYS > config/chroma.yaml 的 consult.most_recent_essays > 默认 3。
+def _read_most_recent_essays() -> int:
+    raw = os.environ.get('MOST_RECENT_ESSAYS') or _CONSULT.get('most_recent_essays')
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 3
+
+MOST_RECENT_ESSAYS = _read_most_recent_essays()
 
 REVIEW_ROOT = Path(get_abs_path('data/reviews'))
 METRICS_FILE = REVIEW_ROOT / 'consult_metrics.json'
@@ -543,7 +577,7 @@ class ReviewIndex:
         limit = DEFAULT_THRESHOLD if threshold is None else threshold
         return [(d, s) for d, s in raw if s is not None and s >= limit]
 
-    # ------------------------------------------------------------------ 学情聚合
+    # ------------------------------------------------------------- 学情聚合
 
     def student_profile(self, student: str, owner: Optional[str] = None) -> Dict:
         """
@@ -573,7 +607,7 @@ class ReviewIndex:
                 'review_id': metric.get('id') or '',
             })
             for dim in (metric.get('dimensions') or []):
-                name, value, maximum = dim.get('name'), dim.get('score'), dim.get('max_score')
+                name, value, maximum = _canonical_dim(dim), dim.get('score'), dim.get('max_score')
                 if not name or not isinstance(value, int) or not isinstance(maximum, int) or maximum <= 0:
                     continue
                 bucket = dim_agg.setdefault(name, {'sum_score': 0, 'sum_max': 0, 'n': 0})
@@ -595,8 +629,8 @@ class ReviewIndex:
         for name, bucket in dim_agg.items():
             if bucket['sum_max'] > 0:
                 dim_rates[name] = {
-                    'rate': round(bucket['sum_score'] / bucket['sum_max'], 3),
-                    'avg_score': round(bucket['sum_score'] / bucket['n'], 1),
+                    'rate': float(round(bucket['sum_score'] / bucket['sum_max'], 3)),
+                    'avg_score': float(round(bucket['sum_score'] / bucket['n'], 1)),
                     'n': bucket['n'],
                 }
 
@@ -719,7 +753,8 @@ def render_profile(profile: Dict) -> str:
         items = '；'.join(f'{i["aspect"]}（{i["count"]}篇）' for i in strengths[:5])
         lines.append(f'相对稳定的优点：{items}')
 
-    recent_essays = (profile.get('scores') or [])[-5:]
+    # 「最近 N 篇」由 MOST_RECENT_ESSAYS 配置控制（需求 D3，默认 3）
+    recent_essays = (profile.get('scores') or [])[-MOST_RECENT_ESSAYS:]
     if recent_essays:
         items = '；'.join(
             f'{s["date"]}《{s["title"] or "未命题"}》{s["score"]}分{s["rating"]}' for s in recent_essays

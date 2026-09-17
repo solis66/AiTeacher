@@ -344,9 +344,9 @@ onBeforeUnmount(() => {
   max-width: 900px;
   margin: 10px auto 20px auto;
   padding: 12px 14px;
-  background-color: var(--c-bg);
+  background-color: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   box-shadow: var(--shadow-1);
   flex-shrink: 0;
 }

@@ -279,3 +279,40 @@ def locate(quote, pages, page_number=None):
         matches.append((index + 1, boxes))
 
     return matches[0] if len(matches) == 1 else (None, [])
+
+
+def locate_origin(quote, pages, page_number=None):
+    """
+    定位 AI 引用的原句，返回命中的「真实 OCR 行文本」（与图片原文一致）。
+
+    与 locate 共享同一套唯一命中规则（消除空白后全文匹配、仅接受唯一命中），
+    区别在于：locate 只返回坐标（用于图上画框），本函数返回被该句覆盖到的
+    OCR 行的原始文本拼接——供「原文纠正」以图片中的原文为准来展示。
+
+    返回：
+        (int|None, str): (页码, 覆盖到该句的 OCR 行文本；未命中时字符串为空)
+    """
+    normalize = lambda text: re.sub(r'\s+', '', text)
+    query = normalize(quote)
+    if not query:
+        return None, ''
+
+    matches = []
+    for index, page in enumerate(pages):
+        if page_number and index + 1 != page_number:
+            continue
+        joined = ''.join(normalize(line['text']) for line in page['lines'])
+        start = joined.find(query)
+        # 出现两次及以上视为歧义，放弃定位
+        if start < 0 or joined.find(query, start + 1) >= 0:
+            continue
+        # 收集被该句覆盖到的行（保留 OCR 原始文本，跨多行用换行连接）
+        offset, lines_hit = 0, []
+        for line in page['lines']:
+            end = offset + len(normalize(line['text']))
+            if end > start and offset < start + len(query):
+                lines_hit.append(line['text'])
+            offset = end
+        matches.append((index + 1, '\n'.join(lines_hit)))
+
+    return matches[0] if len(matches) == 1 else (None, '')

@@ -43,6 +43,29 @@
           </div>
         </div>
 
+        <!-- 固定五维评分（需求 D1：内容/结构/立意/语言/书面） -->
+        <section class="panel-section">
+          <header class="section-head">
+            <span class="section-title">详细评分（五维）</span>
+          </header>
+          <div class="dims-grid">
+            <div v-for="dim in dimensionEntries" :key="dim.name" class="dim-cell">
+              <span class="dim-name">{{ dim.name }}</span>
+              <span class="dim-edit">
+                <input
+                  v-model.number="dim.score"
+                  type="number"
+                  class="ui-input dim-input"
+                  min="0"
+                  :max="dim.max_score"
+                  @input="onDimensionChange"
+                />
+                <span class="dim-max">/ {{ dim.max_score }}</span>
+              </span>
+            </div>
+          </div>
+        </section>
+
         <!-- 仅提供默认选中的「通用评价」，直接编辑，不做预览卡与编辑框的重复展示 -->
         <section class="panel-section">
           <header class="section-head">
@@ -102,20 +125,41 @@
             </button>
           </header>
           <div v-show="open.rewrites" class="section-content">
-            <div v-for="field in rewriteFields" :key="field.key" class="field">
+            <!-- 改写标题（单个字符串） -->
+            <div class="field">
               <div class="field-head">
-                <span class="field-label">{{ field.label }}</span>
-                <button type="button" class="ui-icon-btn" data-tip="复制" @click="copy(result.rewrites?.[field.key])">
+                <span class="field-label">改写标题</span>
+                <button type="button" class="ui-icon-btn" data-tip="复制" @click="copy(rewrite.title)">
                   <Copy :size="12" />
                 </button>
               </div>
               <textarea
-                v-model="result.rewrites[field.key]"
+                v-model="rewrite.title"
                 class="ui-textarea field-box"
-                :placeholder="`AI 未给出${field.label}改写`"
+                placeholder="AI 未给出改写标题"
                 @input="markDirty"
               ></textarea>
-              <p v-if="!result.rewrites?.[field.key]" class="missing-hint">AI 未给出该方面改写。</p>
+              <p v-if="!rewrite.title" class="missing-hint">AI 未给出该方面改写。</p>
+            </div>
+
+            <!-- 开头/结尾：各 3 个候选（数组） -->
+            <div v-for="field in arrayRewriteFields" :key="field.key" class="field">
+              <div class="field-head">
+                <span class="field-label">{{ field.label }}（3 个候选）</span>
+              </div>
+              <div v-for="(cand, ci) in rewriteArray(field.key)" :key="ci" class="cand-row">
+                <span class="cand-index">{{ ci + 1 }}</span>
+                <textarea
+                  :value="cand"
+                  class="ui-textarea field-box cand-box"
+                  :placeholder="`AI 未生成${field.label}候选 ${ci + 1}`"
+                  @input="updateCand(field.key, ci, $event.target.value)"
+                ></textarea>
+                <button type="button" class="ui-icon-btn" data-tip="复制" @click="copy(cand)">
+                  <Copy :size="12" />
+                </button>
+              </div>
+              <p v-if="!((rewrite[field.key] || []).length)" class="missing-hint">AI 未给出{{ field.label }}改写。</p>
             </div>
           </div>
         </section>
@@ -136,8 +180,8 @@
                   <Copy :size="12" />
                 </button>
               </div>
-              <!-- 原句只读展示（保留原文，人工修改的是建议部分） -->
-              <p class="quote-text">{{ item.quote }}</p>
+              <!-- 原句只读展示：优先展示命中的真实 OCR 原文（与图片一致），未定位时回退到 AI 引句 -->
+              <p class="quote-text">{{ item.matched_text || item.quote }}</p>
               <textarea
                 v-model="item.suggestion"
                 class="ui-textarea field-box"
@@ -295,11 +339,28 @@ const ratingOptions = ['优', '良', '需改进'];
 const open = ref({ rewrites: true, corrections: true, analysis: true, highlights: true, suggestions: true });
 const toggle = (key) => { open.value[key] = !open.value[key]; };
 
-const rewriteFields = [
-  { key: 'title', label: '改写标题' },
+const rewrite = computed(() => {
+  const r = props.result.rewrites || {};
+  if (!r.title) r.title = '';
+  if (!Array.isArray(r.opening)) r.opening = [];
+  if (!Array.isArray(r.ending)) r.ending = [];
+  return r;
+});
+const arrayRewriteFields = [
   { key: 'opening', label: '改写开头' },
   { key: 'ending', label: '改写结尾' }
 ];
+/** 取某数组改写的候选列表（兼容旧数据：单个字符串 → 折成单元素数组） */
+const rewriteArray = (key) => {
+  const v = rewrite.value[key];
+  return v;
+};
+/** 更新数组改写的某个候选；数组不足 3 个时前端按 N/A 兜底展示，不硬凑 */
+const updateCand = (key, index, value) => {
+  const arr = rewrite.value[key];
+  arr[index] = value;
+  markDirty();
+};
 
 const analysisFields = [
   { key: 'content', label: '内容' },
@@ -313,6 +374,24 @@ const corrections = computed(() => props.result.corrections || []);
 const highlights = computed(() => props.result.highlights || []);
 const suggestions = computed(() => props.result.suggestions || []);
 
+/** 固定五维评分（需求 D1：内容/结构/立意/语言/书面） */
+const dimensionEntries = computed(() => {
+  const dims = props.result.dimensions || [];
+  return dims.map((d) => ({
+    name: d.name,
+    score: (typeof d.score === 'number') ? d.score : 0,
+    max_score: d.max_score || 10
+  }));
+});
+
+/** 修改任一维度分数后，总分与等级随之同步，保持口径一致 */
+const onDimensionChange = () => {
+  const total = dimensionEntries.value.reduce((sum, d) => sum + (Number(d.score) || 0), 0);
+  props.result.score = total;
+  props.result.rating = total >= 40 ? '优' : total >= 30 ? '良' : '需改进';
+  markDirty();
+};
+
 // 评分依据（可解释性）：主依据（题目/题干要求）与辅依据（评分标准文件）
 const basis = computed(() => props.result.scoring_basis || {});
 const basisStateText = (s) => (s === true || s === 'true') ? '满足' : (s === false || s === 'false') ? '未满足' : '部分';
@@ -320,7 +399,13 @@ const basisStateClass = (s) => (s === true || s === 'true') ? 'ok' : (s === fals
 
 const rewritesText = computed(() => {
   const r = props.result.rewrites || {};
-  return rewriteFields.map((f) => `【${f.label}】${r[f.key] || ''}`).join('\n');
+  const lines = [`【改写标题】${r.title || ''}`];
+  ['opening', 'ending'].forEach((key) => {
+    const label = key === 'opening' ? '开头' : '结尾';
+    const arr = Array.isArray(r[key]) ? r[key] : [];
+    arr.forEach((c, i) => lines.push(`【改写${label}候选${i + 1}】${c || ''}`));
+  });
+  return lines.join('\n');
 });
 
 const markDirty = () => emit('change');
@@ -433,6 +518,50 @@ const copy = async (text) => {
   border-radius: var(--r-pill);
 }
 
+/* 固定五维评分（内容/结构/立意/语言/书面）：2 列紧凑网格 */
+.dims-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+.dim-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: var(--fs-xs);
+  background: var(--c-bg-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+}
+.dim-name { color: var(--c-text-secondary); flex-shrink: 0; }
+.dim-edit { display: flex; align-items: center; gap: 3px; }
+.dim-input { width: 44px; padding: 2px 4px; font-size: var(--fs-sm); font-weight: 600; text-align: right; }
+.dim-max { font-size: 11px; color: var(--c-text-muted); }
+
+/* 改写开头/结尾候选数组：序号徽标 + 编辑框 + 复制 */
+.cand-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.cand-index {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--c-primary);
+  background: var(--c-primary-soft);
+  border-radius: 50%;
+}
+.cand-box { min-height: 72px; max-height: 200px; flex: 1; font-size: var(--fs-sm); }
+
 .style-chip {
   display: inline-block;
   padding: 3px 10px;
@@ -459,7 +588,7 @@ const copy = async (text) => {
   font-size: var(--fs-xs);
   line-height: 1.7;
   color: var(--c-error);
-  background: #fef7f6;
+  background: var(--c-error-soft);
   border-left: 3px solid var(--c-error);
   border-radius: 3px;
 }
@@ -505,9 +634,9 @@ const copy = async (text) => {
   font-size: 11px;
   border-radius: var(--r-pill);
 }
-.basis-state.ok { color: #1a7f37; background: #dcfce7; }
-.basis-state.no { color: #b42318; background: #fee4e2; }
-.basis-state.part { color: #9a6700; background: #fef3c7; }
+.basis-state.ok { color: var(--c-ok); background: var(--c-ok-soft); }
+.basis-state.no { color: var(--c-error); background: var(--c-error-soft); }
+.basis-state.part { color: var(--c-warn); background: var(--c-warn-soft); }
 .basis-explanation { margin: 6px 0 0; padding-top: 6px; border-top: 1px dashed var(--c-border); color: var(--c-text-secondary); }
 
 @media (max-width: 1280px) {

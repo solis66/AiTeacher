@@ -72,8 +72,8 @@ defineProps({
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  border: 3px solid #e2e8f0;
-  border-top-color: #1a73e8;
+  border: 3px solid var(--c-bg-muted);
+  border-top-color: var(--c-primary);
   animation: spin 1s linear infinite;
 }
 
@@ -85,7 +85,7 @@ defineProps({
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background-color: #1a73e8;
+  background-color: var(--c-primary);
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -114,7 +114,7 @@ defineProps({
  */
 .loading-text {
   font-size: 14px;
-  color: #64748b;
+  color: var(--c-text-secondary);
   font-weight: 500;
 }
 

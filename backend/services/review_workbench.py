@@ -29,9 +29,37 @@ from services.review_store import ReviewStore
 GRADES = ('七年级', '八年级', '九年级')
 ESSAY_TYPES = ('议论文', '记叙文', '说明文')
 
+# 后台 AI 批改并发闸（需求 D2）：批量/多单同时批改时防止触达限流，
+# 全局默认最多同时运行 2 个批改任务。
+BATCH_CONCURRENCY = 2
+_GRADE_SEM = threading.BoundedSemaphore(BATCH_CONCURRENCY)
+
+# 批量批改限制（需求 D2）：最多 2 篇；单次最多 6 张图片/PDF
+#（每篇仍受 MAX_PAGES 约束，单个用例最多 3 张）。
+BATCH_MAX_ESSAYS = 2
+BATCH_MAX_TOTAL_UPLOADS = 6
+
 
 def _now():
     return datetime.now().isoformat(timespec='seconds')
+
+
+def derive_title(pages, limit=30):
+    """从 OCR/文字层分页中提取作文题目，用于命名批改记录。
+
+    规则：取第一页首个非空行，去掉常见标题装饰括号后再当作题目；
+    该行过长则截断，无 OCR 页或无非空行时返回空串。
+    """
+    for page in pages:
+        for line in page.get('lines') or []:
+            text = (line.get('text') or '').strip()
+            if not text:
+                continue
+            text = text.strip('《》「」“”""〔〕．。，、， ')
+            if not text:
+                continue
+            return text[:limit]
+    return ''
 
 
 class ReviewWorkbench:
@@ -173,11 +201,23 @@ class ReviewWorkbench:
             record = self._write(record, status='recognizing')
             directory = self._dir(record_id)
             pages = prepare_pages(record, directory)
+            # 用 OCR 原文里识别出的标题命名记录（仅当用户未手动填写题目时不覆盖）
+            rec_input = record.get('input') or {}
+            if not (rec_input.get('title') or '').strip():
+                ocr_title = derive_title(pages)
+                if ocr_title:
+                    rec_input = dict(rec_input)
+                    rec_input['title'] = ocr_title
             # 页面就绪后立即落库，前端可先看到原文
-            record = self._write(record, pages=pages, pages_ready=True, status='grading')
+            record = self._write(record, pages=pages, pages_ready=True, status='grading',
+                                 input=rec_input)
 
-            # 阶段二：AI 批改
-            result = grade(record)
+            # 阶段二：AI 批改（受全局并发闸约束，防止批量/多单触达限流）
+            _GRADE_SEM.acquire()
+            try:
+                result = grade(record)
+            finally:
+                _GRADE_SEM.release()
 
             # ai_result 保留模型原始产物；result 为当前生效版本（后续可被人工修改覆盖）
             # input 一并写回：grade 内会根据题干回写实际生效的体裁，需要持久化
@@ -189,6 +229,55 @@ class ReviewWorkbench:
                 self._write(record, status='failed', error=str(exc)[:500])
             except Exception:
                 pass
+
+    def create_batch(self, owner, essays):
+        """
+        批量创建批改任务（需求 D2：批量 = 生成 N 条独立记录）。
+
+        参数：
+            owner:  数据归属键（X-Username）
+            essays: 作文列表，每项为 {
+                'grade', 'essay_type', 'title', 'requirements', 'body',
+                'uploads': [(原始文件名, 二进制内容)], 'student'
+            }
+
+        约束：
+            - 最多 BATCH_MAX_ESSAYS 篇（默认 2）
+            - 全部篇目合计上传文件 ≤ BATCH_MAX_TOTAL_UPLOADS（默认 6）
+            - 每篇上传数仍受 MAX_PAGES（3）约束
+            - 每篇独立创建、独立走自己的状态机；任一篇失败互不影响
+
+        返回：
+            list: 新建的各记录（与传入 essays 顺序一致）
+
+        异常：
+            ValueError: 批量限制或单篇参数校验不通过
+        """
+        if not essays:
+            raise ValueError('请至少提交一篇作文')
+        if len(essays) > BATCH_MAX_ESSAYS:
+            raise ValueError(f'一次最多同时批改{BATCH_MAX_ESSAYS}篇作文')
+        total_uploads = sum(len((e.get('uploads') or [])) for e in essays)
+        if total_uploads > BATCH_MAX_TOTAL_UPLOADS:
+            raise ValueError(f'一次批量最多上传{BATCH_MAX_TOTAL_UPLOADS}张图片/PDF'
+                             f'（每篇不超过{MAX_PAGES}张）')
+
+        records = []
+        for i, essay in enumerate(essays, start=1):
+            record = self.create(
+                owner,
+                (essay.get('grade') or '').strip(),
+                (essay.get('essay_type') or '').strip(),
+                essay.get('title') or '',
+                essay.get('requirements') or '',
+                essay.get('body') or '',
+                essay.get('uploads') or [],
+                essay.get('student') or None,
+            )
+            # 保证返回顺序与提交顺序一致，便于前端按序聚合展示
+            record['batch_index'] = i
+            records.append(record)
+        return records
 
     def retry(self, record_id, owner):
         """重试失败的记录：复用已有附件与页面，只重跑 AI 批改。"""
@@ -291,17 +380,24 @@ class ReviewWorkbench:
         return path
 
     def export(self, record_id, owner, fmt):
-        """按已保存版本导出 PDF。"""
-        from utils.export_utils import export_pdf
+        """按已保存版本导出 MD / PDF（需求 D4：两者仅在批改结果页提供）。
+
+        MD 与 PDF 由 utils/export_utils 的同一份源生成（MD→PDF），文件名统一取
+        用户在需求中指定的「用户名 + 作文标题」。
+        """
+        from utils.export_utils import export_pdf, safe_filename
 
         record = self.store.get(record_id, owner)
         if record is None:
             raise ValueError('批改记录不存在')
         if record['status'] != 'done' or not record.get('result'):
             raise ValueError('批改尚未完成，无法导出')
-        if fmt != 'pdf':
-            raise ValueError('不支持的导出格式')
-        return export_pdf(record), 'application/pdf'
+        title = (record.get('input') or {}).get('title', '') or '作文批改报告'
+        base = f"{safe_filename(owner or '用户')}_{safe_filename(title)}"
+        # 已移除 MD 导出；PDF 内部仍用同一份结构化数据渲染
+        if fmt == 'pdf':
+            return export_pdf(record), 'application/pdf', f'{base}.pdf'
+        raise ValueError('不支持的导出格式')
 
     def delete(self, record_id, owner):
         """删除记录及其文件目录。"""

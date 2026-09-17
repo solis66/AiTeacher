@@ -7,7 +7,10 @@
       :class="{ 'user': msg.role === 'user', 'assistant': msg.role === 'assistant' }"
     >
       <!-- 头像 -->
-      <div class="message-avatar">{{ msg.role === 'user' ? '👤' : '🤖' }}</div>
+      <div class="message-avatar">
+        <User v-if="msg.role === 'user'" :size="16" />
+        <Bot v-else :size="16" />
+      </div>
 
       <div class="message-content-wrapper">
         <div class="message-header">
@@ -101,7 +104,7 @@
 
     <!-- 空状态 -->
     <div v-if="messages.length === 0" class="empty-state">
-      <div class="empty-icon">📝</div>
+      <div class="empty-icon"><FileText :size="40" /></div>
       <div class="empty-title">开始你的作文批改之旅</div>
       <div class="empty-desc">
         输入作文正文，或上传作文图片 / PDF（一次上传视为同一篇作文，最多3张），选择年级后发送，AI 批改老师将为你批改
@@ -126,7 +129,7 @@
  */
 
 import { ref, watch, nextTick } from 'vue';
-import { FileText, ChevronRight, Loader2, AlertCircle, RefreshCw } from 'lucide-vue-next';
+import { FileText, ChevronRight, Loader2, AlertCircle, RefreshCw, User, Bot } from 'lucide-vue-next';
 import { reviewPageUrl } from '../utils/reviewUrl.js';
 import { formatChatTime as formatTime } from '../utils/format.js';
 
@@ -185,10 +188,10 @@ watch(() => props.messages.length, scrollToBottom);
   height: 32px;
   border-radius: 50%;
   background-color: var(--c-bg-muted);
+  color: var(--c-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
   flex-shrink: 0;
 }
 .message.user .message-avatar { background-color: var(--c-primary); color: #fff; }
@@ -208,7 +211,7 @@ watch(() => props.messages.length, scrollToBottom);
   word-break: break-word;
 }
 .message.user .message-content { background-color: var(--c-primary-soft); }
-.message.assistant .message-content { background-color: var(--c-bg); border: 1px solid var(--c-border); }
+.message.assistant .message-content { background-color: var(--c-surface); border: 1px solid var(--c-border); }
 
 /* 命题信息 */
 .user-meta {
@@ -229,12 +232,14 @@ watch(() => props.messages.length, scrollToBottom);
   position: relative;
   width: 96px;
   padding: 0;
-  background: var(--c-bg);
+  background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--r-sm);
   overflow: hidden;
   cursor: pointer;
+  transition: border-color .15s;
 }
+.user-attachment:hover { border-color: var(--c-border-strong); }
 .user-attachment img { width: 100%; height: 72px; object-fit: cover; display: block; }
 .user-attachment-file {
   height: 72px;
@@ -275,7 +280,7 @@ watch(() => props.messages.length, scrollToBottom);
   width: 100%;
   padding: 10px 12px;
   text-align: left;
-  background: var(--c-bg);
+  background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--r-md);
   cursor: pointer;
@@ -292,7 +297,7 @@ watch(() => props.messages.length, scrollToBottom);
   border: 1px solid var(--c-border);
   border-radius: 4px;
   overflow: hidden;
-  background: #fff;
+  background: var(--c-surface);
 }
 .entry-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .entry-thumb-placeholder {
@@ -312,7 +317,10 @@ watch(() => props.messages.length, scrollToBottom);
 .entry-arrow { color: var(--c-text-muted); flex-shrink: 0; }
 
 /* 批改失败 */
-.review-failed { border-color: #f5c2be; background: #fef7f6; }
+.review-failed {
+  background-color: var(--c-error-soft);
+  border: 1px solid rgba(217, 48, 37, 0.14);
+}
 .failed-head {
   display: flex;
   align-items: center;
@@ -335,7 +343,7 @@ watch(() => props.messages.length, scrollToBottom);
   padding: 40px;
   text-align: center;
 }
-.empty-icon { font-size: 44px; margin-bottom: 16px; }
+.empty-icon { color: var(--c-text-muted); margin-bottom: 16px; }
 .empty-title { font-size: var(--fs-lg); font-weight: 600; color: var(--c-text); margin-bottom: 10px; }
 .empty-desc { font-size: var(--fs-md); color: var(--c-text-secondary); line-height: 1.6; max-width: 420px; }
 

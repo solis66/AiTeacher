@@ -19,7 +19,7 @@ from utils.standard_loader import (
     extract_topic_requirements,
     load_unified_standard,
 )
-from services.review_documents import locate
+from services.review_documents import locate, locate_origin
 from utils.watermark_cleaner import summarize_watermarks
 
 # 详细点评中 AI 分析的固定五个方面（顺序即前端展示顺序）
@@ -143,13 +143,28 @@ def validate_result(result, pages):
             raise ValueError('批改结果格式错误：' + key)
         result[key] = value
 
-    # 吸睛改写（标题/开头/结尾）与 AI 分析（内容丰富结构语言技巧情感）：必须是固定字段的字符串字典
-    for key, fields in [('rewrites', ['title', 'opening', 'ending']),
-                        ('analysis', ANALYSIS_FIELDS)]:
-        value = result.get(key, {})
-        if not isinstance(value, dict) or any(not isinstance(value.get(f, ''), str) for f in fields):
-            raise ValueError('批改结果格式错误：' + key)
-        result[key] = {f: value.get(f, '') for f in fields}
+    # 吸睛改写：title 为字符串；opening/ending 各为「3 个候选」的字符串数组。
+    # 需求允许“漏生成时前端给 N/A 兜底，不硬凑”——因此空列表不判失败，
+    # 但任一非空元素必须是字符串，保证下游可渲染。
+    rw = result.get('rewrites', {})
+    if not isinstance(rw, dict):
+        raise ValueError('批改结果格式错误：rewrites')
+    rw_title = rw.get('title')
+    if not isinstance(rw_title, str):
+        raise ValueError('批改结果格式错误：rewrites.title')
+    rw_clean = {'title': rw_title}
+    for key in ('opening', 'ending'):
+        cands = rw.get(key)
+        if not isinstance(cands, list) or any(not isinstance(c, str) for c in cands):
+            raise ValueError('批改结果格式错误：rewrites.' + key)
+        rw_clean[key] = cands
+    result['rewrites'] = rw_clean
+
+    # AI 分析（内容/结构/语言/技巧/情感）：必须是固定字段的字符串字典
+    analysis = result.get('analysis', {})
+    if not isinstance(analysis, dict) or any(not isinstance(analysis.get(f, ''), str) for f in ANALYSIS_FIELDS):
+        raise ValueError('批改结果格式错误：analysis')
+    result['analysis'] = {f: analysis.get(f, '') for f in ANALYSIS_FIELDS}
 
     # 全文润色：标题 + 正文
     if not isinstance(result.get('polished_title', ''), str):
@@ -170,9 +185,12 @@ def validate_result(result, pages):
                     or not isinstance(item.get('suggestion', ''), str):
                 raise ValueError('批注缺少有效原句或建议')
             page, boxes = locate(item['quote'], pages, item.get('page'))
+            _, matched_text = locate_origin(item['quote'], pages, item.get('page'))
             cleaned.append({
                 'id': f'{key}-{len(cleaned) + 1}',
                 'quote': item['quote'],
+                # 命中的真实 OCR 原句（与图片一致）；空串表示未能唯一定位
+                'matched_text': matched_text,
                 'suggestion': item.get('suggestion', ''),
                 'kind': item.get('kind') if item.get('kind') in ('highlight', 'issue', 'correction') else 'issue',
                 'page': page,          # None 表示未能唯一定位，前端展示为“未定位”而非瞎标
@@ -270,7 +288,7 @@ def grade(record):
     schema = {
         'dimensions': [{'name': name, 'score': 0} for name in maxima],
         'overall_comment': '',
-        'rewrites': {'title': '', 'opening': '', 'ending': ''},
+        'rewrites': {'title': '', 'opening': ['开头候选1', '开头候选2', '开头候选3'], 'ending': ['结尾候选1', '结尾候选2', '结尾候选3']},
         'corrections': [{'quote': '', 'suggestion': '', 'page': 1}],
         'analysis': dict.fromkeys(ANALYSIS_FIELDS, ''),
         'highlights': [],
@@ -337,8 +355,9 @@ def grade(record):
 维度评分必须为范围内整数。分析、亮点、建议和改写必须针对原文。全文润色保持原意，不虚构经历。
 rewrites（吸睛改写）必须是实质性提升的**新版本**：
 - title：给出比原标题更吸睛的新标题；若题干为命题作文（以“…”为题）则保持原题并微调副标题式表达
-- opening / ending：重写开头/结尾，运用更生动的描写、悬念或点题技巧
-- 三个改写都禁止照抄或仅微调原文：任何改写与原文逐字重复超过12字即为不合格
+- opening / ending：各给出**3 个不同思路的候选**，运用更生动的描写、悬念或点题技巧；
+  两者均返回 **3 个字符串组成的数组**，顺序即推荐顺序；允许"思路方向 + 一段示范"的结构
+- 所有改写都禁止照抄或仅微调原文：任何改写与原文逐字重复超过12字即为不合格
 必须在 JSON 中返回 scoring_basis 字段，用于解释评分依据与贡献：
 - primary：主依据描述（题目与题干要求）
 - title / requirements：本次的题目与题干原文
@@ -410,17 +429,25 @@ annotations与corrections的quote必须是从原文中连续复制的一段：�
     # 吸睛改写有效性：改写不得是原文的逐字片段；命中则触发一次定向补写
     rw = result.get('rewrites') or {}
     prompt_given_title = bool(re.search(r'以.{1,30}?为题目?', inp.get('requirements', '')))
-    invalid = [key for key in ('opening', 'ending') if rw.get(key) and _is_verbatim(rw[key], source_text)]
+    # 数组字段（opening/ending）：逐候选判定，出现任一不合格候选即判定该字段需补写
+    invalid_keys = []
+    for key in ('opening', 'ending'):
+        cands = rw.get(key) or []
+        if any(_is_verbatim(c, source_text) for c in cands):
+            invalid_keys.append(key)
+    # title 为字符串，单独判定
     if rw.get('title') and not prompt_given_title:
         src_title = (inp.get('title') or '').strip() or (
             (record['pages'][0].get('text') or '').strip().splitlines()[0]
             if record['pages'] and (record['pages'][0].get('text') or '').strip() else '')
         if src_title and (_norm_spaces(rw['title']) == _norm_spaces(src_title)
                           or _is_verbatim(rw['title'], src_title, min_len=6)):
-            invalid.append('title')
-    if invalid:
+            invalid_keys.append('title')
+    if invalid_keys:
         middle = '……（中略）……' + source_text[-200:] if len(source_text) > 600 else ''
-        fields = '、'.join(invalid)
+        fields = '、'.join(invalid_keys)
+        fix_schema = ('{"title": "改写标题", "opening": ["开头候选1","开头候选2","开头候选3"], '
+                      '"ending": ["结尾候选1","结尾候选2","结尾候选3"]}')
         fix_prompt = f'''你是初中语文作文名师。此前对同一篇作文的吸睛改写不合格——{fields}被写成了与原文相同的内容。
 作文原文：
 {source_text[:400]}
@@ -428,13 +455,23 @@ annotations与corrections的quote必须是从原文中连续复制的一段：�
 题目：{inp.get('title', '')}
 题干要求：{inp.get('requirements', '')}
 请重新完成改写（重点：{fields}），必须实质性提升表现力，与原文逐字重复不得超过12字，保持原意与学生视角，符合初中生水平。
-只返回JSON：{{"title": "改写标题", "opening": "改写开头", "ending": "改写结尾"}}'''
+开头/结尾各给出 3 个不同思路的候选；只返回JSON，禁止Markdown：{fix_schema}'''
         fixed = _extract_json(model.bind(response_format={'type': 'json_object'}).invoke(fix_prompt).content)
-        for key in invalid:
-            value = fixed.get(key) if isinstance(fixed, dict) else None
-            if not isinstance(value, str) or not value.strip() or _is_verbatim(value, source_text):
-                raise ValueError('模型未能给出有效的吸睛改写，请重试')
-            rw[key] = value
+        if not isinstance(fixed, dict):
+            raise ValueError('模型未能给出有效的吸睛改写，请重试')
+        for key in invalid_keys:
+            if key == 'title':
+                value = fixed.get('title')
+                if not isinstance(value, str) or not value.strip() or _is_verbatim(value, source_text):
+                    raise ValueError('模型未能给出有效的吸睛改写，请重试')
+                rw[key] = value
+            else:
+                cands = fixed.get(key) if isinstance(fixed.get(key), list) else []
+                cands = [c for c in cands if isinstance(c, str) and c.strip() and not _is_verbatim(c, source_text)]
+                if not cands:
+                    raise ValueError('模型未能给出有效的吸睛改写，请重试')
+                # 保留过滤后的数组；不足 3 个时前端按 N/A 兜底展示，不硬凑
+                rw[key] = cands
         result['rewrites'] = rw
     result['marks'] = []
     # 回写实际生效的体裁（题干检测结果），供前端展示与人工保存

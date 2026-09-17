@@ -18,7 +18,7 @@
 - 严格的内容相关性检测，屏蔽无关消息
 """
 
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Iterator
 from model.factory import get_chat_model, is_model_initialized
 from agent.tools.react_agent import ReactAgent
 from services import consult_context
@@ -699,6 +699,84 @@ class ConsultationService:
         logger.error("[AI响应生成] 所有AI调用方式均失败")
         return "抱歉，我暂时无法回答这个问题，请稍后重试。"
     
+    def _generate_ai_response_stream(self, question: str, history=None, owner: str = '',
+                                     role: str = 'auto', student: str = '') -> Iterator[Tuple[str, str]]:
+        """
+        流式生成AI回答（yield 增量文本）
+
+        与 _generate_ai_response 完全等价的降级链，区别只在产出方式：
+            - 主路径 ReactAgent.execute_stream 逐 token 产出，直接转发给调用方（yield 'delta'）。
+            - 降级路径（Agent 失败/空响应、直接调用模型、简化提示词）没有流式通道，
+              把整段结果作为一条 'delta' 产出。
+            - 全部失败时 yield ('error', 提示语)。
+
+        返回：
+            Iterator[Tuple[str, str]]，每个元素为 (kind, text)：
+                kind  ∈ {'delta', 'error'}
+        """
+        # 参考资料装配（与 _generate_ai_response 一致）
+        context = None
+        try:
+            context = consult_context.build_context(question, owner, role=role, student_hint=student)
+            logger.info(
+                "[AI响应生成-流式] 参考资料：范围=%s 学生=%s 批改片段=%s条",
+                context.get('scope'), context.get('student') or '-', context.get('n_cases'),
+            )
+        except Exception as exc:
+            logger.error(f"[AI响应生成-流式] 参考资料装配失败，降级为无资料回答: {exc}")
+
+        prompt_core = self._build_consultation_prompt(question, context=context)
+        prompt_full = self._build_consultation_prompt(question, history, context=context)
+
+        # 方式1：尝试使用ReactAgent（逐 token 流式）
+        try:
+            if self._agent is None:
+                logger.warning("[AI响应生成-流式] ReactAgent为None，跳过此方式")
+            else:
+                total = ""
+                for chunk in self._agent.execute_stream(prompt_core, history):
+                    if chunk:
+                        total += chunk
+                        yield ('delta', chunk)
+                if total.strip():
+                    logger.info(f"[AI响应生成-流式] ReactAgent流式响应完成，长度: {len(total)}")
+                    return
+                logger.warning("[AI响应生成-流式] ReactAgent返回空响应，尝试备用方式")
+        except Exception as e:
+            logger.error(f"[AI响应生成-流式] 使用ReactAgent失败: {str(e)}")
+
+        # 方式2：尝试直接调用聊天模型（完整提示词，整段产出）
+        try:
+            chat_model_instance = self.chat_model
+            if chat_model_instance:
+                model_response = chat_model_instance.invoke(prompt_full)
+                content = model_response.content if hasattr(model_response, 'content') else str(model_response)
+                if content and content.strip():
+                    logger.info(f"[AI响应生成-流式] 直接调用模型成功，长度: {len(content)}")
+                    yield ('delta', content.strip())
+                    return
+                logger.warning("[AI响应生成-流式] 直接调用模型返回空响应")
+        except Exception as e:
+            logger.error(f"[AI响应生成-流式] 直接调用聊天模型失败: {str(e)}")
+
+        # 方式3：尝试简化提示词
+        try:
+            chat_model_instance = self.chat_model
+            if chat_model_instance:
+                simple_prompt = f"作为初中语文老师，请回答问题：{question}"
+                model_response = chat_model_instance.invoke(simple_prompt)
+                content = model_response.content if hasattr(model_response, 'content') else str(model_response)
+                if content and content.strip():
+                    logger.info(f"[AI响应生成-流式] 简化提示词调用成功，长度: {len(content)}")
+                    yield ('delta', content.strip())
+                    return
+        except Exception as e:
+            logger.error(f"[AI响应生成-流式] 简化提示词调用失败: {str(e)}")
+
+        # 所有方式都失败，返回友好提示
+        logger.error("[AI响应生成-流式] 所有AI调用方式均失败")
+        yield ('error', '抱歉，我暂时无法回答这个问题，请稍后重试。')
+
     def _build_consultation_prompt(self, question: str, history=None, context: dict = None) -> str:
         """
         构建专业咨询提示词
@@ -863,6 +941,59 @@ class ConsultationService:
             'content': ai_response
         }
     
+    def stream_answer_question(self, question: str, history=None, owner: str = '',
+                               role: str = 'auto', student: str = '') -> Iterator[Dict[str, Any]]:
+        """
+        流式回答用户咨询问题（SSE 逐块产出）
+
+        与 answer_question 处理链路完全一致（输入验证 / 问候语 / 知识库 / AI生成），
+        唯一区别是 AI 生成部分（含降级链）按增量 token 逐块 yield。
+
+        返回：
+            Iterator[Dict[str, Any]]，每个元素均为可 JSON 序列化的事件：
+                {'type': 'delta', 'content': str, 'response_type': str}  回答增量文本
+                {'type': 'error', 'content': str}                        出错（回答结束）
+                {'type': 'done'}                                         回答结束
+        """
+        # 1. 输入验证
+        is_valid, cleaned_question, error_msg = self._validate_input(question)
+        if not is_valid:
+            yield {'type': 'error', 'content': error_msg}
+            return
+
+        # 2. 问候语响应（即时回答，作为单条 delta 产出）
+        greeting_response = self._generate_greeting_response(cleaned_question)
+        if greeting_response:
+            logger.info("[咨询服务-流式] 返回问候语响应")
+            yield {'type': 'delta', 'content': greeting_response, 'response_type': 'greeting'}
+            yield {'type': 'done'}
+            return
+
+        # 3. 范围解析（同非流式）
+        scope_info = consult_context.resolve(cleaned_question, owner, role, student)
+        personal = scope_info.get('scope') != 'none'
+
+        # 4. 预设知识库（仅通用问题）
+        if not personal:
+            knowledge_response = self._get_knowledge_response(cleaned_question)
+            if knowledge_response:
+                logger.info("[咨询服务-流式] 返回知识库响应")
+                yield {'type': 'delta', 'content': knowledge_response, 'response_type': 'knowledge'}
+                yield {'type': 'done'}
+                return
+
+        # 5. AI 流式生成
+        logger.info("[咨询服务-流式] 使用AI流式生成回答")
+        for kind, piece in self._generate_ai_response_stream(
+                cleaned_question, history, owner=owner, role=role, student=student):
+            if kind == 'delta':
+                yield {'type': 'delta', 'content': piece, 'response_type': 'ai'}
+            elif kind == 'error':
+                yield {'type': 'error', 'content': piece}
+                return
+
+        yield {'type': 'done'}
+
     def is_ready(self) -> bool:
         """
         检查服务是否就绪
@@ -920,3 +1051,15 @@ def answer_consultation(question: str, history=None, owner: str = '',
     """
     return consultation_service.answer_question(question, history,
                                                 owner=owner, role=role, student=student)
+
+
+def stream_answer_consultation(question: str, history=None, owner: str = '',
+                               role: str = 'auto', student: str = '') -> Iterator[Dict[str, Any]]:
+    """
+    咨询服务流式便捷函数（对外暴露的接口，供 /chat stream=true 调用）
+
+    参数含义与 answer_consultation 完全一致，唯一区别是返回按 token 增量产出的事件流。
+    每个事件均为可 JSON 序列化 dict：{'type': 'delta'|'error'|'done', 'content'?, 'response_type'?}
+    """
+    return consultation_service.stream_answer_question(question, history,
+                                                       owner=owner, role=role, student=student)
