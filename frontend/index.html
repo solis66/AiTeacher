@@ -2,9 +2,14 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <!--
+      站点图标放 public/favicon.svg：Vite 会原样拷贝到 dist 根目录，
+      访问路径就是 /favicon.svg，无需构建即可直接生效。
+      （原先引的是 Vite 脚手架默认的 /vite.svg，但 public/ 目录并不存在，浏览器一直 404。）
+    -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI智能批改教师</title>
+    <title>AI智能批改工作台</title>
   </head>
   <body>
     <div id="app"></div>

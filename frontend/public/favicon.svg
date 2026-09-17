@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="AI智能批改工作台">
+  <!--
+    站点图标（favicon）。放在 public/ 下，Vite 会原样拷到 dist 根目录，访问路径 /favicon.svg。
+
+    与应用内品牌标识保持一致：顶栏品牌方块是 32×32 的圆角蓝底 + 白色学士帽，
+    帽子图形取自 components/MainPage.vue 里的 GraduationCap，底色用主色 #0f77ff。
+
+    重要：本文件是 XML，注释里不能出现连续两个连字符（CSS 注释里那种写法会让整份
+    文件解析失败，浏览器表现为图标空白或裂图，且控制台不报错）。所以此处一律用
+    「主色」之类的说法，不写 CSS 变量名。改这个文件时请留意。
+  -->
+  <rect width="32" height="32" rx="7" fill="#0f77ff" />
+  <!--
+    图形占位：24×24 的图标原稿平移到 (4,4)，即四周留 4 白边，图形占方块约 75%。
+    早先按 (6,6) 缩放 0.83 试过，图形只占 62.5%，浏览器标签栏缩到 16px 时糊成一团，
+    所以放大到接近满格；笔画同步从 2 微调到 2.1，避免小尺寸下线太细被抗锯齿吃掉。
+  -->
+  <g transform="translate(4 4)" fill="none" stroke="#ffffff" stroke-width="2.1"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z" />
+    <path d="M22 10v6" />
+    <path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5" />
+  </g>
+</svg>
