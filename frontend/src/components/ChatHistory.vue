@@ -107,7 +107,7 @@
       <div class="empty-icon"><FileText :size="40" /></div>
       <div class="empty-title">开始你的作文批改之旅</div>
       <div class="empty-desc">
-        输入作文正文，或上传作文图片 / PDF（一次上传视为同一篇作文，最多3张），选择年级后发送，AI 批改老师将为你批改
+        输入有关于作文的任何问题，或上传作文材料，AI老师将为你提供专业的建议与指导。
       </div>
     </div>
   </div>

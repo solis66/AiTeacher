@@ -4,7 +4,7 @@
     <header class="app-navbar">
       <div class="navbar-brand">
         <span class="brand-logo"><GraduationCap :size="20" /></span>
-        <span class="brand-name">AI智能批改教师</span>
+        <span class="brand-name">AI智能批改工作台</span>
       </div>
 
       <div class="navbar-user">
