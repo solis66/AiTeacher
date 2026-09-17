@@ -132,7 +132,11 @@ def resolve(message: str, owner: str, role: str = 'auto', student: str = '') -> 
     try:
         index = get_index()
         index.sync()
-        known = index.students()
+        # 必须按 owner 收窄：students() 不传 owner 时返回的是**全库**学生名，
+        # 只要别的账号也在同一台机器上提交过作文，"本账号有多名学生"就被误判成立，
+        # 提问者本人的学情会被当成「教师未指明学生」整块丢弃（范围解析退化为 none）。
+        # 这与 review_workbench.students(owner) 的口径保持一致。
+        known = index.students(owner)
     except Exception:
         known = []
     return resolve_scope(message, owner, role, student, known)
@@ -160,7 +164,9 @@ def build_context(message: str, owner: str, role: str = 'auto', student_hint: st
         notes.append(f'索引同步失败：{exc}')
 
     try:
-        known = index.students()
+        # 同样必须按 owner 收窄（理由见 resolve 中的说明），
+        # 否则全库学生名会污染「本账号有几名学生」的判断。
+        known = index.students(owner)
     except Exception as exc:
         known = []
         notes.append(f'学生名单读取失败：{exc}')
