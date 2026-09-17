@@ -8,9 +8,9 @@
           <div class="logo-icon">
             <GraduationCap :size="32" />
           </div>
-          <h1 class="app-title">AI智能批改教师</h1>
+          <h1 class="app-title">AI智能批改工作台</h1>
         </div>
-        <p class="app-subtitle">专业的初中作文批改助手</p>
+        <p class="app-subtitle">专业的中学语文作文批改助手</p>
       </div>
 
       <!-- 登录/注册表单 -->
