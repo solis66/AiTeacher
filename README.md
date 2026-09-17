@@ -1,44 +1,16 @@
 # AITeacher - AI作文批改系统
-
-<!-- 项目徽章 -->
-![GitHub](https://img.shields.io/github/license/yourusername/AiTeachers)
-![Python Version](https://img.shields.io/badge/python-3.11%2B-blue)
-![Vue Version](https://img.shields.io/badge/vue-3.3%2B-green)
-![Flask Version](https://img.shields.io/badge/flask-3.x-orange)
-![Vite Version](https://img.shields.io/badge/vite-4.4%2B-purple)
-
 ---
 
 ## 项目概述 | Project Overview
 
-AITeacher 是一个面向**初中语文老师**的 AI 作文批改效率工具。系统采用 RAG（检索增强生成）技术，依据标准化评分标准自动完成作文初批——多维度评分、总体评价与改进建议一次生成；老师再在批改工作台中对 AI 结果进行复核、修订与精批，把重复性劳动交给 AI，把精力留给因材施教。
+AITeacher 是一个课程项目，主要面向中学生语文作文的 AI 作文批改工作台。系统采用 RAG（检索增强生成）技术，依据标准化评分标准自动完成作文初批——多维度评分、总体评价与改进建议一次生成；用户可以在批改工作台中对 AI 结果进行复核、修订与精批，把重复性劳动交给 AI，把精力留给因材施教。
 
-同时，系统内置 **AI 咨询助手**：基于教研知识库与学生历史批改学情的检索问答，帮助老师快速解答作文教学问题、了解班级学生的写作薄弱点。
+同时，系统内置 **AI 咨询助手**：基于教研知识库与历史批改学情的检索问答，帮助用户快速解答作文教学问题、了解写作薄弱点。
 
-AITeacher is an AI-powered essay grading assistant designed for **middle school Chinese teachers**. Built on RAG (Retrieval-Augmented Generation) technology, it automatically produces a first-pass grading report — multi-dimensional scores, overall comments and improvement suggestions — against standardized scoring criteria. Teachers then review, refine and finalize the results in the grading workbench, letting AI handle the repetitive work while they focus on personalized instruction.
 
-An integrated **AI consultation assistant** answers essay-teaching questions by retrieving from the teaching-research knowledge base and students' grading history, helping teachers quickly understand each student's writing weaknesses.
+### 主要核心功能 | Core Features
 
-### 核心功能 | Core Features
 
-| 功能 | 描述 | Feature | Description |
-|:---|:---|:---|:---|
-| 📝 **智能作文批改** | 自动识别作文体裁（议论文、记叙文、说明文），依据标准化作文评分标准进行多维度评分并生成批改报告 | **Intelligent Essay Grading** | Automatically detects essay types (Argumentative, Narrative, Expository) and produces a multi-dimensional grading report against standardized criteria |
-| 🖼️ **多格式作文提交** | 支持直接输入文本，或上传手写作文图片/PDF 附件，由批改工作台统一处理 | **Multi-format Submission** | Accepts typed text or handwritten essay images/PDF attachments, processed uniformly by the grading workbench |
-| 🖊️ **批改工作台** | 批改结果页面：原文页画布查看（缩放、旋转、翻页）、画笔批注与橡皮擦除、撤销/恢复、逐页下载，AI 评分支持人工修订覆盖 | **Grading Workbench** | Result page with canvas viewing (zoom, rotate, page navigation), pen annotations, eraser, undo/redo, per-page download; AI scores are manually adjustable |
-| ✨ **润色对比** | AI 生成润色稿后以差异对比视图呈现，老师可直观看到逐句修改建议 | **Polish Diff** | AI-generated polished drafts are presented as diff views, showing sentence-level revisions at a glance |
-| 🎓 **AI 咨询助手** | 面向老师的作文教学问答：检索教研知识库与学生历史批改学情，支持多轮对话与追问 | **AI Consultation Assistant** | Teaching Q&A for teachers: retrieves from the knowledge base and students' grading history, with multi-turn conversation support |
-| 🔁 **异步批改与失败重试** | 批改任务异步执行（排队 → 识别 → 批改 → 完成），失败后可一键重试，无需重新上传材料 | **Async Grading & Retry** | Grading runs asynchronously (queued → recognizing → grading → done) with one-click retry that reuses uploaded materials |
-| 📤 **批改结果导出** | 批改完成后可导出为pdf格式归档 | **Result Export** | Grading results can be exported to multiple formats for archiving |
-| 📊 **历史记录** | 对话历史本地保存并同步服务器；批改记录按用户隔离，可随时回看 | **History Records** | Chat history is stored locally and synced to the server; grading records are user-isolated and always retrievable |
-
-### 典型使用流程 | Typical Workflow
-
-1. 老师登录后，在对话首页粘贴作文文本或上传手写作文图片，选择体裁（可留空由 AI 自动识别）；
-2. 系统创建批改任务并在对话流中展示进度（批改中 → 完成入口）；
-3. 点击进入**批改工作台**：对照原文逐页查看 AI 评分，修改分数、调整评语、添加画笔批注；
-4. 需要时查看**润色稿差异对比**，或将批改结果导出归档；
-5. 教学中遇到问题（如何讲评某类作文、某学生常见问题等），随时向 **AI 咨询助手**提问。
 
 ---
 
@@ -55,6 +27,8 @@ An integrated **AI consultation assistant** answers essay-teaching questions by 
 - **构建工具**: Vite 4.4+
 - **HTTP 客户端**: Axios（统一封装拦截器）
 - **样式**: CSS3
+
+### 
 
 ### 项目结构 | Project Structure
 
@@ -177,23 +151,9 @@ npm run build
 
 Build output will be in the `frontend/dist/` directory.
 
-### 登录凭证 | Login Credentials
 
-| 用户名 | 密码 | Username | Password |
-|:---|:---|:---|:---|
-| admin | 123456 | admin | 123456 |
 
----
 
-## 支持的作文类型 | Supported Essay Types
-
-| 类型 | 评分维度 | Type | Scoring Dimensions |
-|:---|:---|:---|:---|
-| **议论文** | 立意与中心、论点与论证、结构与层次、语言表达、例证与材料运用 | **Argumentative** | Theme, Arguments, Structure, Language, Evidence |
-| **记叙文** | 立意与中心、选材与内容、结构与层次、语言表达、细节与表现、书写与规范 | **Narrative** | Theme, Content, Structure, Language, Details, Writing |
-| **说明文** | 立意与中心、结构与层次、语言表达、方法与技巧、书写与规范 | **Expository** | Theme, Structure, Language, Methods, Writing |
-
----
 
 ## 贡献指南 | Contributing
 
@@ -215,13 +175,6 @@ Contributions are welcome! Please follow these steps:
 
 ---
 
-## 许可证 | License
-
-本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
 
 ## 联系方式 | Contact
 
