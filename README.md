@@ -1,4 +1,4 @@
-# AITeacher - AI作文批改系统
+# AITeacher - AI作文批改工作台
 ---
 
 ## 项目概述 | Project Overview
