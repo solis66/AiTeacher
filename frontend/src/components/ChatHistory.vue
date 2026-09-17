@@ -14,7 +14,7 @@
 
       <div class="message-content-wrapper">
         <div class="message-header">
-          <span class="message-role">{{ msg.role === 'user' ? '我' : 'AI批改老师' }}</span>
+          <span class="message-role">{{ msg.role === 'user' ? '我' : 'AI咨询老师' }}</span>
           <span class="message-time">{{ formatTime(msg.timestamp) }}</span>
         </div>
 
@@ -97,8 +97,15 @@
           </div>
         </div>
 
-        <!-- ============ AI：普通回复（咨询类） ============ -->
-        <div v-else class="message-content">{{ msg.content }}</div>
+        <!-- ============ AI：普通回复（咨询类）============
+             回复内容是 Markdown（### 小标题 / **加粗** / 列表 / > 引用 / 表格），
+             统一交给 renderMarkdown 渲染成富文本，不再原样显示 markdown 记号。
+             该函数内部已做 DOMPurify 净化，v-html 才是安全的。 -->
+        <div
+          v-else
+          class="message-content markdown-body"
+          v-html="renderMarkdown(msg.content)"
+        ></div>
       </div>
     </div>
 
@@ -132,6 +139,7 @@ import { ref, watch, nextTick } from 'vue';
 import { FileText, ChevronRight, Loader2, AlertCircle, RefreshCw, User, Bot } from 'lucide-vue-next';
 import { reviewPageUrl } from '../utils/reviewUrl.js';
 import { formatChatTime as formatTime } from '../utils/format.js';
+import { renderMarkdown } from '../utils/markdown.js';
 
 const props = defineProps({
   messages: { type: Array, default: () => [] },
@@ -212,6 +220,19 @@ watch(() => props.messages.length, scrollToBottom);
 }
 .message.user .message-content { background-color: var(--c-primary-soft); }
 .message.assistant .message-content { background-color: var(--c-surface); border: 1px solid var(--c-border); }
+
+/*
+ * AI 回复走 markdown 渲染（见 utils/markdown.js）。
+ *
+ * 上面 .message-content 的 white-space: pre-wrap 是给**纯文本**用的：markdown 生成的
+ * HTML 源码里带换行与缩进，pre-wrap 会把它们当成真实换行再渲染一遍，于是每个块级元素
+ * 之间都会多出一段空白（实测 h3 / blockquote / li 之间各空一大截）。
+ * 换行应当完全交给 markdown 生成的 <p> / <br> 表达，所以这里必须改回 normal。
+ *
+ * 只能写在本文件的 scoped 块里，且用双类名：style.css 里的 `.markdown-body` 是单类名，
+ * 优先级（0,1,0）压不过带 scoped 属性的 `.message-content[data-v-x]`（0,2,0）。
+ */
+.message-content.markdown-body { white-space: normal; }
 
 /* 命题信息 */
 .user-meta {

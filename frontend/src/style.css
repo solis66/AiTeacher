@@ -691,3 +691,93 @@ body {
 .ui-badge--done    { color: var(--c-ok); background: var(--c-ok-soft); }
 .ui-badge--failed  { color: var(--c-error); background: var(--c-error-soft); }
 .ui-badge--muted   { color: var(--c-text-secondary); background: var(--c-bg-muted); }
+
+/*
+ * ============================================================================
+ * Markdown 渲染（AI 咨询回复，见 utils/markdown.js）
+ * ============================================================================
+ *
+ * 这些标签由 v-html 注入，不带组件的 scoped 属性，所以样式只能写在这里；
+ * 写进组件的 <style scoped> 里就得逐个 :deep()，又长又容易漏。
+ *
+ * 注意：white-space 的覆盖不在这里 —— 容器的 .message-content 带 scoped 属性，
+ * 优先级比这里的单类名规则高，必须写在 ChatHistory.vue 里，见该文件的说明。
+ */
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+
+.markdown-body p { margin: 0 0 8px; }
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 14px 0 6px;
+  font-size: var(--fs-md);
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--c-text);
+}
+.markdown-body h1,
+.markdown-body h2 { font-size: var(--fs-lg); }
+
+.markdown-body hr {
+  height: 1px;
+  margin: 12px 0;
+  border: none;
+  background: var(--c-border);
+}
+
+.markdown-body ul,
+.markdown-body ol { margin: 0 0 8px; padding-left: 22px; }
+.markdown-body li { margin: 3px 0; }
+/* 列表项里的段落：markdown 会给「列表项 + 缩进正文」包一层 <p>，不收紧会很松散 */
+.markdown-body li > p { margin: 0 0 4px; }
+.markdown-body li > ul,
+.markdown-body li > ol { margin: 4px 0 0; }
+
+.markdown-body strong { font-weight: 700; color: var(--c-text); }
+.markdown-body del { color: var(--c-text-muted); }
+
+.markdown-body blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  color: var(--c-text-secondary);
+  background: var(--c-bg-subtle);
+  border-left: 3px solid var(--c-primary);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.markdown-body blockquote > :last-child { margin-bottom: 0; }
+
+.markdown-body code {
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .92em;
+  background: var(--c-bg-muted);
+  border-radius: 4px;
+}
+.markdown-body pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  background: var(--c-bg-muted);
+  border-radius: var(--r-sm);
+}
+.markdown-body pre code { padding: 0; background: none; }
+
+.markdown-body table {
+  width: 100%;
+  margin: 8px 0;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 6px 10px;
+  text-align: left;
+  border: 1px solid var(--c-border);
+}
+.markdown-body th { font-weight: 600; background: var(--c-bg-subtle); }
+
+.markdown-body a { color: var(--c-primary); text-decoration: underline; }
+.markdown-body img { max-width: 100%; border-radius: var(--r-sm); }
