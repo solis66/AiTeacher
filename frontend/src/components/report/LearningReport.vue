@@ -38,10 +38,10 @@
 
       <div class="card-block dim-block" v-if="Object.keys(profile.dim_rates || {}).length">
         <span class="block-title">各维度得分率</span>
-        <div v-for="(info, name) in orderedDims" :key="name" class="dim-row">
-          <span class="dim-name">{{ name }}</span>
-          <div class="dim-bar"><div class="dim-bar-fill" :style="{ width: (info.rate * 100) + '%' }"></div></div>
-          <span class="dim-meta">{{ info.avg_score }}分 · {{ info.n }}篇 · {{ Math.round(info.rate * 100) }}%</span>
+        <div v-for="dim in orderedDims" :key="dim.name" class="dim-row">
+          <span class="dim-name">{{ dim.name }}</span>
+          <div class="dim-bar"><div class="dim-bar-fill" :style="{ width: (dim.rate * 100) + '%' }"></div></div>
+          <span class="dim-meta">{{ dim.avg_score }}分 · {{ dim.n }}篇 · {{ Math.round(dim.rate * 100) }}%</span>
         </div>
       </div>
 
@@ -102,9 +102,21 @@ const ownerHeader = () => ({ 'X-Username': props.username || 'anonymous' });
 
 const formatScore = (v) => (v === null || v === undefined ? '—' : `${v}分`);
 
+/**
+ * 维度得分率列表。
+ *
+ * 注意：这里必须摊平成「带 name 字段的对象数组」，不能直接返回 Object.entries() 的
+ * [name, info] 二元组。Vue 的 v-for 在数组上把第二个变量当作**下标**而不是解构出来的
+ * key，直接写 `v-for="(info, name) in orderedDims"` 会拿到 name=0/1/2/3/4、
+ * info=['书面', {...}]，表现为维度名显示成数字、各项数值全是 NaN。
+ *
+ * 排序：得分率由低到高（与后端 render_profile 的口径一致，最该补的排最上面）。
+ */
 const orderedDims = computed(() => {
   const map = profile.value?.dim_rates || {};
-  return Object.entries(map);
+  return Object.entries(map)
+    .map(([name, info]) => ({ name, ...info }))
+    .sort((a, b) => (a.rate ?? 0) - (b.rate ?? 0));
 });
 
 const trendDelta = computed(() => {
