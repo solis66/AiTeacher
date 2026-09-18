@@ -596,8 +596,39 @@ ls -l /home/admin/AiTeacher/.env      # 应有内容，不应是 0 字节
 grep -c '=' /home/admin/AiTeacher/.env   # 期望 8
 ```
 
-> ⚠️ 若 scp 提示需要密码而你没设过 `admin` 的密码，去 ECS 控制台
-> 「实例 → 更多 → 重置实例密码」设一个再试。
+> ⚠️ **若 scp 报 `Permission denied (publickey)`** —— 说明实例只接受**密钥登录**，
+> 不接受密码（建实例时选了密钥对就会这样）。三条出路，按省事程度排序：
+>
+> **① 用网页控制台的「远程连接」直接建文件**（最快，不需要改服务器任何配置）。
+> 控制台那个终端走的是云助手通道，不是 SSH，所以没有密钥限制。在服务器上执行：
+>
+> ```bash
+> cat > ~/AiTeacher/.env <<'ENVEOF'
+> ...把 .env 的全部内容粘进来...
+> ENVEOF
+> chmod 600 ~/AiTeacher/.env
+> ls -l ~/AiTeacher/.env; grep -c '=' ~/AiTeacher/.env    # 期望 876 字节 / 8
+> ```
+>
+> 注意：值里若含 `!`，交互式 bash 可能报 `event not found`（历史展开），
+> 先执行 `set +H` 再粘贴即可。`<<'ENVEOF'` 的引号不能丢，否则 `$` 会被展开。
+>
+> **② 把本机公钥装到服务器**（一次配置，之后 scp/ssh 都能用）。本机执行
+> `type %USERPROFILE%\.ssh\id_ed25519.pub` 取出公钥，然后在**网页终端**里执行：
+>
+> ```bash
+> TARGET_HOME=/home/admin
+> mkdir -p "$TARGET_HOME/.ssh"
+> echo 'ssh-ed25519 AAAA...你的公钥...' >> "$TARGET_HOME/.ssh/authorized_keys"
+> chmod 700 "$TARGET_HOME/.ssh" && chmod 600 "$TARGET_HOME/.ssh/authorized_keys"
+> chown -R admin:admin "$TARGET_HOME/.ssh"
+> ```
+>
+> 之后原来的 scp 命令就能直接跑通（本机 `~/.ssh/id_ed25519` 会自动被使用）。
+>
+> **③ 控制台重置实例密码**：ECS → 实例 → 更多 → 密码/密钥 → 重置实例密码，
+> **需要重启实例才生效**。最慢，但不需要在服务器上做任何操作。
+
 
 
 ### 9.8 第七步：安全组放行 80
