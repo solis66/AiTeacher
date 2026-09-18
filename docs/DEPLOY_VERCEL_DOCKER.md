@@ -358,7 +358,13 @@ docker compose -f docker-compose.backend.yml up -d --build
 docker compose -f docker-compose.backend.yml logs -f backend
 ```
 
-首次构建 5–10 分钟，瓶颈在 pip（已默认走腾讯云内网源）。
+首次构建 5–10 分钟，瓶颈在 pip。镜像源默认走公网 `mirrors.aliyun.com`（任何云都可达）；
+要用腾讯云内网源加速，加环境变量覆盖，不必改文件：
+
+```bash
+PIP_INDEX_URL=http://mirrors.cloud.tencent.com/pypi/simple \
+  docker compose -f docker-compose.backend.yml up -d --build
+```
 日志出现 Flask 启动信息后 `Ctrl+C` 退出日志跟踪（容器仍在后台跑）。
 
 ### 8.7 第六步：验证
@@ -618,8 +624,29 @@ docker compose -f docker-compose.backend.yml up -d --build
 docker compose -f docker-compose.backend.yml logs -f --tail 50 backend
 ```
 
-首次构建 5–10 分钟（pip 装约 550 MB 依赖，已走阿里云内网源）。看到 Flask 启动日志后
-`Ctrl+C` 退出日志跟踪（容器仍在后台跑）。
+首次构建 5–10 分钟（pip 装约 550 MB 依赖）。
+
+**镜像源默认走公网 `mirrors.aliyun.com`，任何云厂商都能构建。** 内网源更快，但
+**只有对应云的内网可达**，填错会直接构建失败（pip 连不上）。先探测哪个通：
+
+```bash
+curl -s -o /dev/null -w 'aliyun  %{http_code}\n' --max-time 8 http://mirrors.cloud.aliyuncs.com/pypi/simple/
+curl -s -o /dev/null -w 'tencent %{http_code}\n' --max-time 8 http://mirrors.cloud.tencent.com/pypi/simple/
+```
+
+返回 `200` 的那条就是这台机器该用的。用环境变量覆盖，**不必改文件**：
+
+```bash
+# 阿里云
+PIP_INDEX_URL=http://mirrors.cloud.aliyuncs.com/pypi/simple \
+  docker compose -f docker-compose.backend.yml up -d --build
+
+# 腾讯云
+PIP_INDEX_URL=http://mirrors.cloud.tencent.com/pypi/simple \
+  docker compose -f docker-compose.backend.yml up -d --build
+```
+
+看到 Flask 启动日志后 `Ctrl+C` 退出日志跟踪（容器仍在后台跑）。
 
 ### 9.10 第九步：验证
 
