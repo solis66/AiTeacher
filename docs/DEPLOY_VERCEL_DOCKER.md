@@ -810,10 +810,18 @@ docker compose -f docker-compose.backend.yml logs --tail 100 backend
 
 ### 9.12 日常运维
 
+#### 改了东西怎么更新（按改动类型选操作，别一律重装）
+
+| 改动 | 操作 | 大概耗时 |
+|---|---|---|
+| 前端（Vue） | `git push` 即可，Vercel 自动构建部署 | 1 分钟内，**服务器完全不动** |
+| 后端 `.py` 代码 | `git pull` → `up -d --build` | 1–2 分钟（依赖层命中缓存） |
+| `.env`（密钥 / 数据库） | 重传 `.env` → `up -d`（**不需要** `--build`） | 几秒 |
+| `requirements.txt`（装新包） | `git pull` → `up -d --build` | 5–10 分钟（pip 全量重装） |
+| `Dockerfile` / compose | `git pull` → `up -d --build` | 视改动而定 |
+
 ```bash
 cd /home/admin/AiTeacher
-
-# 更新代码后重新部署（数据卷不受影响）
 git pull && docker compose -f docker-compose.backend.yml up -d --build
 
 # 日志 / 重启 / 停止
@@ -822,7 +830,47 @@ docker compose -f docker-compose.backend.yml restart
 docker compose -f docker-compose.backend.yml down
 ```
 
-**本机磁盘占用**：镜像约 1 GB + 构建缓存。磁盘紧张时清理：
+#### 为什么只改代码时重建很快
+
+Dockerfile 的层顺序是：基础镜像 → apt 装 `libgomp1` → `pip install` → **最后才 `COPY` 代码**。
+只改 `.py` 时前面几层全部命中缓存，只有拷贝代码那层重跑。
+
+**所以不要把 `COPY` 往前提**，也不要在它之前放任何会变的东西 —— 否则依赖层缓存失效，
+每次都得重装 550 MB。
+
+#### 数据不会丢
+
+`history/`、`data/reviews/`、`chroma_db/` 三个卷落在宿主机上，
+`--build` 重建容器**不影响它们**，可以放心反复重建。
+
+#### 最容易踩的坑
+
+`docker compose up -d` **不带 `--build`** —— 容器还在跑旧镜像，你会以为"改了代码没生效"。
+**改代码一律加 `--build`。**
+
+#### 想跳过重建、快速验证一个改动
+
+改的只是 `.py` 时，可以只替换容器里的那个文件再重启，省掉整次重建。
+**但这只是临时验证，下次 `--build` 会被覆盖**，别当正式流程用：
+
+```bash
+docker compose -f docker-compose.backend.yml cp backend/api.py backend:/app/api.py
+docker compose -f docker-compose.backend.yml restart backend
+```
+
+#### `.dockerignore` 是必需的，别删
+
+仓库根的 `.dockerignore` 排除了 `backend/data/reviews`、`backend/chroma_db`、
+`backend/history`、`backend/logs`、`*.sqlite3`、`review_index_state.json` 等运行期数据
+（同时保留 `backend/data/` 下的评分标准与 `knowledge/`）。
+
+**不加会怎样**：容器跑一段时间后，这些目录会被卷填满真实数据，下次 `docker build`
+就把它们一起 `COPY` 进镜像 —— 镜像随运行时间越建越大，用户上传的作文图片和批改记录
+还会被烤进镜像层。`.gitignore` **挡不住这个问题**：它只管 git，Docker 只认 `.dockerignore`。
+
+#### 磁盘清理
+
+镜像约 1 GB + 构建缓存。磁盘紧张时：
 
 ```bash
 docker system df          # 先看占用
