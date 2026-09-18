@@ -516,26 +516,83 @@ git remote set-url origin https://github.com/solis66/AiTeacher.git
 > 仓库里的 `backend/Dockerfile`、`docker-compose.backend.yml` 是部署必需的修复版，
 > **必须先在本机 commit + push，服务器才拉得到**。
 
-### 9.7 第六步：把 `.env` 放上去
+### 9.7 第六步：把 `.env` 放上去（这一步有两个坑）
 
 必须在**仓库根目录**（不是 `backend/` 下），`docker-compose.backend.yml` 的 `env_file` 指向那里。
 
-**方式 A（推荐）**：在**本地**终端执行——
+#### 坑一：只传 `backend/.env` 是不够的，容器会启动失败
 
-```bash
-scp backend/.env admin@<公网IP>:/home/admin/AiTeacher/.env
+Windows 开发机上，`DASHSCOPE_API_KEY`、`ALIBABA_CLOUD_ACCESS_KEY_ID/SECRET` 并不在
+`backend/.env` 里，而是以**系统环境变量**形式存在注册表中，由 `backend/utils/win_env.py`
+在启动时兜底读取（`security_config.py` 取不到就会报错退出）。
+
+**Linux 容器里没有注册表**，`win_env.load()` 直接返回 `[]`。所以这三项必须显式写进
+部署用的 `.env`，否则容器启动即失败（`/health` 恒 503 或直接退出）。
+
+从本机注册表取出这三项并与 `backend/.env` 合并（一次性）：
+
+```powershell
+# 只列变量名与长度，不打印明文
+[Environment]::GetEnvironmentVariable('DASHSCOPE_API_KEY','Machine')
+[Environment]::GetEnvironmentVariable('ALIBABA_CLOUD_ACCESS_KEY_ID','Machine')
+[Environment]::GetEnvironmentVariable('ALIBABA_CLOUD_ACCESS_KEY_SECRET','Machine')
 ```
 
-**方式 B**：直接在网页终端里粘贴（`nano` 或 heredoc，注意 `<<'EOF'` 的引号别丢，否则 `$` 会被 shell 展开）：
+把值补进 `.env` 后，部署用的 `.env` 应包含 **8 个变量**：
+
+```
+PG_HOST / PG_PORT / PG_DB / PG_USER / PG_PASSWORD
+DASHSCOPE_API_KEY                          # 缺则直接启动失败
+ALIBABA_CLOUD_ACCESS_KEY_ID                # 缺则 OCR 走降级
+ALIBABA_CLOUD_ACCESS_KEY_SECRET
+```
+
+`DASHSCOPE_API_KEY` 必须是 `sk-` + 32 位十六进制（共 35 字符），
+`validate_api_key_format()` 会校验，格式不对直接抛错。
+
+#### 坑二：cmd 里 `<` `>` 是重定向符，占位符照抄会报「系统找不到指定的文件」
+
+`scp backend/.env admin@<公网IP>:/path` 在 **cmd** 里不会报"主机名无法解析"，
+而是因为 `<公网IP>` 被解释成**标准输入重定向**，报
+`系统找不到指定的文件` —— 很容易误判成本地 `.env` 不存在。
+
+正确写法：**IP 两侧不要尖括号，路径加引号**（在**本地**终端执行）：
+
+```cmd
+scp "C:\完整路径\.env" "admin@你的公网IP:/home/admin/AiTeacher/.env"
+```
+
+PowerShell 里则要注意 `<` `>` 同样是保留字符，同样加引号。
+
+**公网 IP 从哪来**——控制台 ECS 实例列表能看到；也可以在服务器上直接问元数据服务：
+
+```bash
+curl -s http://100.100.100.200/latest/meta-data/eipv4
+# 若为空（经典公网 IP 而非 EIP），用：
+curl -s ifconfig.me
+```
+
+**备选方式**（不想用 scp）：在网页终端里用 heredoc 粘贴，注意 `'EOF'` 的引号不能丢，
+否则 `$` 会被 shell 展开：
 
 ```bash
 cat > /home/admin/AiTeacher/.env <<'EOF'
 DASHSCOPE_API_KEY=...
-PG_HOST=...
 # ...其余变量
 EOF
 chmod 600 /home/admin/AiTeacher/.env
 ```
+
+**传完在服务器上确认**：
+
+```bash
+ls -l /home/admin/AiTeacher/.env      # 应有内容，不应是 0 字节
+grep -c '=' /home/admin/AiTeacher/.env   # 期望 8
+```
+
+> ⚠️ 若 scp 提示需要密码而你没设过 `admin` 的密码，去 ECS 控制台
+> 「实例 → 更多 → 重置实例密码」设一个再试。
+
 
 ### 9.8 第七步：安全组放行 80
 
