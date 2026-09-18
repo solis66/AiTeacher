@@ -1,8 +1,20 @@
-# 部署手册：前端 Vercel + 后端 Docker
+# 部署手册：Docker（后端 / 单机全栈）+ Vercel（可选前端）
 
 > 目标：把 AITeacher 的前后端真正跑在公网上。
-> 结论：**前端上 Vercel，后端必须用 Docker 跑在长期运行的服务器上**，两边用 `frontend/vercel.json` 的 rewrites 打通。
-> 前端代码**一行都不用改**——全站请求都是相对路径（`/chat`、`/api/review/...`），靠代理转发，天然无跨域。
+>
+> **两种架构二选一，不要混用：**
+>
+> | 架构 | 前端 | 后端 | 怎么跑 | 看哪章 |
+> |:---|:---|:---|:---|:---|
+> | **单机全栈（推荐）** | 同一台服务器的 Docker + Nginx | 同机 Docker | `docker compose up -d --build` | **第十一章** |
+> | 前后端分离 | Vercel | 云服务器 Docker | 两个 compose 文件之一 | 第三章 + 第九章 |
+>
+> ⚠️ 两者都要占宿主机 **80** 端口，**切换前必须先 `docker compose -f <旧文件> down`**（别加 `-v`）。
+>
+> 共同前提：前端代码**一行都不用改** —— 全站请求都是相对路径（`/chat`、`/api/review/...`）。
+> 单机靠 Nginx 反代，分离靠 Vercel rewrites，两种情况都同源、天然无跨域。
+>
+> 后端为什么不能用 Serverless（Vercel / Cloudflare 等）见第一章。
 
 ---
 
@@ -813,6 +825,10 @@ docker compose -f docker-compose.backend.yml logs --tail 100 backend
 
 ### 9.12 日常运维
 
+> 本节对应「后端在本机 + 前端在 Vercel」的架构。若已切到**单机全栈**（前端也在本机，见第十一章），
+> 下面命令里的 `docker-compose.backend.yml` 一律换成默认的 `docker-compose.yml`，
+> 且「前端改动」从「push 后 Vercel 自动构建」变成「服务器上 `--build frontend`」（约 20 秒）。
+
 #### 改了东西怎么更新（按改动类型选操作，别一律重装）
 
 | 改动 | 操作 | 大概耗时 |
@@ -1030,4 +1046,140 @@ docker compose -f docker-compose.backend.yml exec backend \
 2. **启动日志把根因吞了。** `user_service` 抛的 `DatabaseUnavailableError` 只带
    一句「数据库连接失败」，真正的 `psycopg2` 异常在 `__cause__` 里。
    现在 `api.py` 会展开整条 `__cause__` 链并打印实际连接参数与密码是否为空。
+
+---
+
+## 十一、前端也部署到同一台服务器（单机全栈方案）
+
+> 一句话：**可以，而且通常比 Vercel 方案更省心。**
+> 服务器上多跑一个 Nginx 容器，前端静态页与后端接口同源 —— 不用配 rewrites、
+> 不用管 Vercel 对 SSE 的缓冲、批改图片的流量也不经过第三方。
+
+### 11.1 资源够不够
+
+本机实测（前端侧）：
+
+| 项 | 实测 | 说明 |
+|:---|:---|:---|
+| `frontend/src` | **179 KB** / 15 个 `.vue` | 源码很小，构建快 |
+| `frontend/node_modules` | 92.5 MB / 7142 文件 | 已被 `frontend/.dockerignore` 排除，**不进构建上下文** |
+| `dist` 构建产物 | **308 KB** / 4 个文件 | 打包后极小 |
+| 前端容器运行期内存 | 约 10–20 MB | `nginx:1.27-alpine` 托管静态文件 |
+| 前端镜像体积 | 约 60–80 MB | nginx:alpine 基础层 + dist |
+
+**结论：2核4G 同时跑「Flask 后端 + Nginx 前端」很宽裕。**
+吃内存的是**构建阶段**，不是运行阶段：后端 `pip` 解压约 550 MB 依赖、前端 `npm ci` 装 92 MB 依赖。
+
+⚠️ `docker compose up -d --build` 会**并行构建两个镜像**，两边的峰值可能叠在一起。
+4G 机器建议**分开构建**（见 11.3），把峰值拆开。
+
+### 11.2 端口怎么分（关键）
+
+| 容器 | 宿主机端口 | 说明 |
+|:---|:---|:---|
+| `frontend` (Nginx) | **80** | 唯一对外入口。安全组**只需放行 80** |
+| `backend` (Flask) | **不映射** | 只在 compose 内网暴露，由 Nginx 反代 `/api`、`/chat`、`/login` 等前缀 |
+
+后端不映射端口是有意为之：**不直接暴露公网**，也省掉再放行一个端口的安全组规则。
+`docker-compose.yml` 里 backend 只有 `volumes` 没有 `ports`，已经是这个形态。
+
+因此验证后端仍然走 Nginx：`curl http://127.0.0.1/health`（80 → nginx → backend:8501）。
+
+### 11.3 部署步骤
+
+```bash
+cd /home/admin/AiTeacher
+
+# ① 先停掉「只跑后端」那套 —— 它占着 80，不停掉前端起不来
+#    不要加 -v：数据是 bind mount，down 不会删数据
+docker compose -f docker-compose.backend.yml down
+
+# ② 拉最新代码（前面几轮的部署修复都在远端）
+git pull
+
+# ③ 分开构建，避开并行构建的内存峰值
+docker compose build backend
+docker compose build frontend
+
+# ④ 启动
+docker compose up -d
+
+# ⑤ 看状态
+docker compose ps
+docker compose logs --tail 30 frontend
+curl -s http://127.0.0.1/health
+```
+
+首次构建耗时：backend 5–10 分钟（pip 装 550 MB）；frontend 约 2–4 分钟
+（`npm ci` 走 npmmirror 1–3 分钟 + `vite build` 十几秒）。
+
+**外网验证**：
+
+```bash
+# 在本地终端执行
+curl -sI http://<公网IP>/ | head -1      # 期望 HTTP/1.1 200 OK
+```
+
+然后浏览器打开 `http://<公网IP>`，按第四章的顺序验收：
+
+1. 页面能打开 → 前端容器通了
+2. **能注册**（返回 JSON 而不是 HTML）→ Nginx 反代 `/register` 通了
+3. 登录后提问，回答**逐字冒出来** → SSE 流式正常（nginx.conf 里已关 `proxy_buffering`）
+4. 工作台上传图片、缩略图能显示 → `/api` 反代正常
+
+### 11.4 构建时最容易踩的坑：lock 文件里的 registry
+
+`frontend/package-lock.json` 里有 **146 处** `https://registry.npmjs.org/...` 的 `resolved` 字段。
+
+**`npm ci` 会严格按这些 URL 下载，只传 `--registry` 参数对它无效** ——
+症状是「明明配了国内源，还是卡住或超时」，很容易误判成源本身不行。
+
+`frontend/Dockerfile` 现在会在装依赖前把 lock 里的域名一并替换成 `${NPM_REGISTRY}`
+（npmmirror 与官方源的包路径结构一致，替换域名即可），并在 `npm ci` 失败时回退到 `npm install`。
+
+要换源（比如某天 npmmirror 不通）：
+
+```bash
+NPM_REGISTRY=https://registry.npmjs.org docker compose build frontend
+```
+
+### 11.5 前端/后端改了怎么更新
+
+| 改什么 | 命令 | 耗时 |
+|:---|:---|:---|
+| 前端源码 | `git pull && docker compose up -d --build frontend` | **约 20 秒**（npm 层命中缓存） |
+| 后端 `.py` | `git pull && docker compose up -d --build backend` | 约 1 分钟（pip 层命中缓存） |
+| `.env` | 重传 `.env` → `docker compose up -d --force-recreate` | 几秒，**不需要 `--build`** |
+| `requirements.txt` / `package.json` | `git pull && docker compose up -d --build` | 数分钟（依赖层失效，重装） |
+
+> `--build frontend` 只重建指定服务，不会连带重建 backend。
+
+能这么快的原因是 Dockerfile 的层顺序：依赖安装层在 `COPY . .` **之前**，
+只改源码时依赖层命中缓存。**不要把这个顺序调反。**
+
+### 11.6 Vercel 还是单机？
+
+| | **单机全栈** | Vercel + 服务器 |
+|:---|:---|:---|
+| 前端国内访问 | 取决于服务器带宽（≥3Mbps 够用） | `*.vercel.app` 国内连通性不稳定 |
+| 批改图片流量 | 客户端 ↔ 服务器，公网只走一次 | 额外经 Vercel 中转，吃 Hobby 月带宽额度 |
+| 代理/跨域配置 | **不需要**（同源） | 要维护 `vercel.json` 的 rewrites，占位符不填就全 404 |
+| SSE 流式 | nginx 已关 buffering，稳 | 可能被 Vercel 平台层缓冲（文档 5.1） |
+| 前端发版 | 服务器重建，缓存命中约 20 秒 | push 后自动构建，约 1 分钟 |
+| 备案 | 用 IP 访问不需要；**绑域名需要** | Vercel 侧不需要，但后端绑域名仍需要 |
+
+**给国内学生用、追求稳定和省心，选单机。** 将来若前端迭代极频繁、或用户主要在海外，
+再拆出 Vercel 也不迟（`frontend/vercel.json` 已就绪，留着不影响单机构建）。
+
+### 11.7 绑域名 + HTTPS（可选）
+
+单机方案下 80 被前端容器占着，宿主机再装 Nginx 抢不到端口 —— 就是 7.5 说的那个冲突。
+正确做法：
+
+1. `docker-compose.yml` 里把前端端口退到 `8080:80`；
+2. 宿主机装 Nginx，监听 80/443，`proxy_pass http://127.0.0.1:8080;`；
+3. `certbot --nginx` 正常签证书（此时 80 已由宿主机 Nginx 持有，不再冲突）。
+
+> 只做答辩演示、能用 IP 访问就行的话，**这一步可以完全跳过** ——
+> 单机方案不需要像 Vercel 那样强制 HTTPS，`http://<IP>` 直接能用。
 
