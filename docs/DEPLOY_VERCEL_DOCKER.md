@@ -788,8 +788,11 @@ curl -s http://<公网IP>/health
 返回 `{"status":"healthy",...}` 即成功。503 表示服务活着但 AI 未就绪：
 
 ```bash
-curl -s http://<公网IP>/config/check    # 直接告诉你哪项密钥没过
+curl -s http://<公网IP>/config/check    # 逐项告诉你密钥 / 模型 / Agent / 数据库哪一项没过
 ```
+
+`/config/check` 现在包含**数据库连接检测**（在容器内真实建连）。
+它报 `数据库连接` failed 时，见第十章。
 
 **外网不通时按顺序排查**：
 
@@ -876,4 +879,155 @@ docker compose -f docker-compose.backend.yml restart backend
 docker system df          # 先看占用
 docker builder prune -f   # 清构建缓存（安全，只删中间层）
 ```
+
+---
+
+## 十、`数据库连接失败` 排查
+
+注册/登录报「数据库连接失败，请稍后重试」（HTTP 503），或启动日志出现
+`⚠️ 用户表初始化失败（注册/登录将不可用）：数据库连接失败` —— 都属于同一类问题：
+**`psycopg2` 在建立连接阶段就失败了。**
+
+### 10.1 先排除「凭据填错了」这个可能
+
+已用**即将部署的同一份凭据**在本机实测：
+
+| 项 | 结果 |
+|---|---|
+| DNS 解析 | `aws-0-ap-southeast-1.pooler.supabase.com` → `52.74.252.201` / `52.77.146.31` / `54.255.219.82` |
+| TCP 5432 | 通 |
+| psycopg2 真实建连 | **成功**，PostgreSQL 17.6，库 `postgres`，`public.users` 存在（1 行） |
+
+也就是说：**数据库活着、账号密码有效、从公网可达。**
+那么服务器上报连接失败，只可能是下面三类之一：
+
+1. 容器压根没读到 `PG_*`（**最常见**，见 10.3）
+2. 容器/宿主机连不出去（见 10.4）
+3. 值在传输或解析环节被改动了
+
+### 10.2 三条命令定位到具体环节
+
+**① 先看真实错误。** 应用层只抛一句「数据库连接失败」，根因在日志里：
+
+```bash
+cd /home/admin/AiTeacher
+docker compose -f docker-compose.backend.yml logs backend 2>&1 \
+  | grep -E '连接数据库失败|用户表初始化|根本原因|连接参数'
+```
+
+新版 `api.py` 启动时会把**根因**和**实际生效的连接参数**一起打出来，形如：
+
+```
+⚠️  用户表初始化失败（注册/登录将不可用）：数据库连接失败
+    根本原因：OperationalError: connection to server at "127.0.0.1", port 5432 failed: Connection refused
+    连接参数：host=127.0.0.1 port=5432 db=postgres user=postgres password=**【空】**
+    ↳ 密码为空：容器没读到 .env，检查仓库根目录下 .env 是否存在（不是 backend/.env）
+```
+
+看到 `host=127.0.0.1` 或 `password=**【空】**`，直接跳到 10.3。
+
+**② 看容器到底拿到了什么**（不打印密码值）：
+
+```bash
+docker compose -f docker-compose.backend.yml exec backend env | grep '^PG_' | sed 's/=.*/=<set>/'
+docker compose -f docker-compose.backend.yml exec backend python -c "import os;print('PG_PASSWORD len =',len(os.getenv('PG_PASSWORD') or ''))"
+```
+
+- 第一条**没有任何输出** → `PG_*` 根本没进容器 → 10.3
+- 第二条输出 `PG_PASSWORD len = 0` → 同上
+- 输出 `PG_PASSWORD len = 15` → 变量没问题 → 10.4
+
+**③ 看 Compose 实际解析成了什么。** 这是最能一锤定音的一条，且不泄露密码：
+
+```bash
+docker compose -f docker-compose.backend.yml config | grep 'PG_HOST' | cat -A
+```
+
+期望输出（`$` 是 `cat -A` 显示的行尾标记）：
+
+```
+      PG_HOST: aws-0-ap-southeast-1.pooler.supabase.com$
+```
+
+若 `PG_HOST` 与 `:` 之间存在空格（如 `PG_HOST :`），说明 **key 被解析成了带尾随空格的
+`PG_HOST `**，`os.getenv('PG_HOST')` 自然取不到值 —— 这就是 10.3 的坑一。
+
+### 10.3 根因 A：`PG_*` 没进容器（最可能）
+
+**坑一：`=` 两侧写了空格。**
+
+`backend/.env` 原本是给项目自己的解析器读的 —— `utils/db_config._load_env_file()`
+对 key 做了 `.strip()`，所以 `PG_HOST = xxx` 在本地一直正常。但 Docker Compose 读
+`env_file` 时，多个来源指出**"`=` 两侧有空格会让 key 带上尾随空格，谁都不匹配"**。
+一旦命中，`os.getenv('PG_HOST')` 返回 `None`，而 `db_config.py` 里有默认值
+（`host='127.0.0.1'`、`password=''`），容器于是**安静地回落到本机 127.0.0.1:5432** ——
+报「数据库连接失败」，而 `.env` 明明就躺在那儿。空密码同理。
+
+> **辨认特征**：容器内 `host` 显示 `127.0.0.1`，或密码长度为 0。
+
+**坑二：文件放错层。** 必须在仓库根 `/home/admin/AiTeacher/.env`，不是 `backend/.env`。
+
+**修法**：用 9.7 的 base64 命令重传（已改成严格 `KEY=VALUE`、无空格、无引号、纯 ASCII），
+然后**强制重建容器**：
+
+```bash
+git pull
+docker compose -f docker-compose.backend.yml up -d --force-recreate
+docker compose -f docker-compose.backend.yml logs --tail 30 backend
+```
+
+> ⚠️ **只 `restart` 不够。** `env_file` 是**创建容器时**注入的，
+> `docker compose restart` 复用同一个容器配置，环境变量不会更新。
+> 改 `.env` 必须 `up -d --force-recreate`（改了代码才需要 `--build`）。
+
+### 10.4 根因 B：容器连不出去
+
+```bash
+# 宿主机侧
+timeout 8 bash -c 'cat < /dev/null > /dev/tcp/aws-0-ap-southeast-1.pooler.supabase.com/5432' \
+  && echo HOST_TCP_OK || echo HOST_TCP_FAIL
+
+# 容器内 DNS
+docker compose -f docker-compose.backend.yml exec backend \
+  python -c "import socket;print(socket.getaddrinfo('aws-0-ap-southeast-1.pooler.supabase.com',5432)[0][4])"
+```
+
+| 现象 | 处理 |
+|---|---|
+| `HOST_TCP_FAIL` | 阿里云安全组**出方向**限制，或链路问题。安全组默认全放，改过就补一条出方向 `5432` |
+| 宿主机通、容器 DNS 失败 | 给 compose 的 backend 加 `dns: [223.5.5.5, 119.29.29.29]` |
+| 宿主机和容器都通，仍认证失败 | 回到 10.3 坑一 |
+
+### 10.5 报错关键字对照表
+
+把 10.2 ① 里 `根本原因` 那行的文本对照下表，基本可以直接定位：
+
+| 真实报错关键字 | 原因 | 处理 |
+|---|---|---|
+| `Connection refused`，且 host 是 `127.0.0.1` | `PG_*` 没进容器，用了内置默认值 | 10.3 坑一 |
+| `fe_sendauth: no password supplied` / `password authentication failed` | 密码为空 / 被改坏 / 与库端不一致 | 重传 `.env` 并比对 sha256 |
+| `could not translate host name ... Name or service not known` | 容器 DNS 解析失败 | 加 `dns:` |
+| `Connection timed out` / `Network is unreachable` | 出网不通 | 安全组出方向 |
+| `Tenant or user not found` | `PG_USER` 少了 `.项目ref` 后缀，或 Supabase 免费项目被暂停 | 用户名须为 `postgres.<ref>`；去控制台唤醒项目 |
+| `SSL required` / `no pg_hba.conf entry` | Supabase 强制 TLS | 连接参数补 `sslmode=require` |
+| `too many clients already` | 连接数打满 | 重建容器；不要开多 worker（见 5.4） |
+
+### 10.6 传完后应该对上的指纹
+
+| 项 | 期望值 |
+|---|---|
+| 文件大小 | `719` 字节 |
+| sha256 | `201b2e766c6aba9c10a85bd5466623d1ef578d42748e09a91fca7de9cea92326` |
+| 变量总数 | `8` |
+| `PG_` 开头变量 | `5` |
+| `=` 前带空格的行 | `0` |
+
+### 10.7 顺带修掉的两个代码盲点
+
+1. **`/config/check` 之前根本不检查数据库。** 按文档去查它会看到「密钥/模型/Agent 全部通过」，
+   却依然连不上库 —— 这就是为什么之前按它的结果排查会迷失。
+   现已加入**在容器内真实建连**的数据库检测项，与注册/登录走的是同一条路。
+2. **启动日志把根因吞了。** `user_service` 抛的 `DatabaseUnavailableError` 只带
+   一句「数据库连接失败」，真正的 `psycopg2` 异常在 `__cause__` 里。
+   现在 `api.py` 会展开整条 `__cause__` 链并打印实际连接参数与密码是否为空。
 
