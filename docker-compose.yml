@@ -1,6 +1,19 @@
-# AiTeachers 阿里云一键编排：backend(Flask) + frontend(Nginx)
-# 用法（服务器上）：docker compose up -d --build
+# AiTeachers 单机一键编排：backend(Flask) + frontend(Nginx)
+#
+# 用法（服务器上，仓库根目录）：
+#   docker compose up -d --build
+#
 # 环境变量从仓库根目录的 .env 读取（.env 已被 .gitignore 排除，不入库）
+#
+# 单机方案要点：
+#   - 前端 Nginx 占宿主机 80，静态页和接口同源，无跨域、无需 Vercel
+#   - backend 不映射宿主机端口，只在 compose 内网暴露，由 nginx 反代 /api 等前缀
+#   - 数据卷落在宿主机目录，重建容器不丢
+#
+# ⚠️ 与 docker-compose.backend.yml 互斥：两者都占宿主机 80，不能同时运行。
+#    从「只跑后端」切换到本文件前，先执行：
+#      docker compose -f docker-compose.backend.yml down
+#    （不要加 -v；数据是 bind mount，down 不会删数据）
 
 services:
   backend:
@@ -14,6 +27,13 @@ services:
         # 加速器不可用时直接指向可用仓库：
         #   BASE_IMAGE=docker.m.daocloud.io/library/python:3.11-slim docker compose up -d --build
         BASE_IMAGE: ${BASE_IMAGE:-python:3.11-slim}
+        # pip / apt 源：默认公网阿里云，任何云厂商都可达。
+        # 云厂商内网源更快，用环境变量覆盖即可（不必改本文件）：
+        #   阿里云：PIP_INDEX_URL=http://mirrors.cloud.aliyuncs.com/pypi/simple
+        #   腾讯云：PIP_INDEX_URL=http://mirrors.cloud.tencent.com/pypi/simple
+        # 内网源只在对应云的内网可达，填错会直接构建失败（pip 连不上）。
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
+        APT_MIRROR: ${APT_MIRROR:-mirrors.aliyun.com}
     restart: unless-stopped
     env_file:
       - ./.env
@@ -40,8 +60,13 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        # npm 源可覆盖：国内默认走 npmmirror，直连官方源会慢到超时。
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
     restart: unless-stopped
     # 对外只暴露 Nginx 的 80（HTTP）。HTTPS 可后续用 acme.sh/certbot 或经 CNAME 的云 CDN 证书补。
+    # 注意：backend 未映射宿主机端口，只能经 nginx 反代访问 —— 这是有意的，
+    # 后端不直接暴露公网，安全组也只需放行 80。
     ports:
       - "80:80"
     depends_on:

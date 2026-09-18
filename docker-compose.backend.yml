@@ -4,6 +4,10 @@
 #   docker compose -f docker-compose.backend.yml up -d --build
 #   docker compose -f docker-compose.backend.yml logs -f
 #
+# ⚠️ 与 docker-compose.yml（单机版：前端+后端同机）互斥：两者都占宿主机 80。
+#    改走单机方案前先停掉本文件起的容器：
+#      docker compose -f docker-compose.backend.yml down   # 不要加 -v
+#    再执行 docker compose -f docker-compose.yml up -d --build
 # 与完整版 docker-compose.yml 的区别：
 #   - 不含 frontend(Nginx) 容器，前端由 Vercel 托管
 #   - backend 直接把宿主机 80 端口映射到容器 8501，云服务器默认放行 80，
