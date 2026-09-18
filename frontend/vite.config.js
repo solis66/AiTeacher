@@ -16,6 +16,12 @@ export default defineConfig({
         target: 'http://localhost:8501',
         changeOrigin: true
       },
+      // 注册接口：后端 /register（LoginPage 注册模式调用）
+      // 此前漏配，请求会落到 vite 自己身上、返回 index.html，导致注册一直失败
+      '/register': {
+        target: 'http://localhost:8501',
+        changeOrigin: true
+      },
       '/get_history': {
         target: 'http://localhost:8501',
         changeOrigin: true
@@ -33,6 +39,11 @@ export default defineConfig({
         changeOrigin: true
       },
       '/health': {
+        target: 'http://localhost:8501',
+        changeOrigin: true
+      },
+      // 配置自检接口（后端 /config/check，排查密钥/模型问题用）
+      '/config': {
         target: 'http://localhost:8501',
         changeOrigin: true
       },

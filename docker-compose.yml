@@ -5,7 +5,10 @@
 services:
   backend:
     build:
-      context: ./backend
+      # 构建上下文必须是仓库根：backend/Dockerfile 里是 COPY backend/xxx，
+      # 若写成 context: ./backend 会导致 COPY 找不到文件、构建直接失败。
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     env_file:
       - ./.env
@@ -13,6 +16,14 @@ services:
       # 生产模式：关闭 debug，端口 8501（Dockerfile 内 EXPOSE 8501）
       - PORT=8501
       - FLASK_DEBUG=0
+    # 运行期数据必须落到宿主机，否则 docker compose up --build 重建容器即丢：
+    #   /app/history      咨询会话记录（Markdown）
+    #   /app/data/reviews 批改记录（reviews.sqlite3 + 上传的作文图片）
+    #   /app/chroma_db    RAG 向量库（重建会触发重新 embedding，很慢且费额度）
+    volumes:
+      - ./backend/history:/app/history
+      - ./backend/data/reviews:/app/data/reviews
+      - ./backend/chroma_db:/app/chroma_db
     # 依赖 chromadb/onnxruntime，启动较慢；给足健康检查超时
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8501/health', timeout=5)"]
@@ -30,4 +41,7 @@ services:
       - "80:80"
     depends_on:
       backend:
-        condition: service_healthy
+        # 用 service_started 而不是 service_healthy：后端带 chromadb/onnxruntime，
+        # 冷启动要 1~2 分钟，且密钥有问题时 /health 会持续返回 503。
+        # 若等 healthy，前端（含静态页）会一直起不来，整站表现为「拒绝连接」，很难排查。
+        condition: service_started
