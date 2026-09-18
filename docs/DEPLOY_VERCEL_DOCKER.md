@@ -482,24 +482,82 @@ free -h   # 确认 Swap 一行有值
 
 ### 9.5 第四步（容易漏）：给 Docker 配镜像加速
 
-**这一步在阿里云上是决定性的**。基础镜像 `python:3.11-slim` 要从 Docker Hub 拉，国内直连经常
-慢到超时或直接失败——它不是 apt/pip 源能救的，必须走 registry 加速。
+**这一步是决定性的。** 基础镜像 `python:3.11-slim` 要从 Docker Hub 拉，国内直连经常
+慢到超时或直接失败——它**不是 apt/pip 源能救的**，必须单独走 registry 加速。
 
-阿里云给每个账号一个**专属免费加速地址**：控制台 → 搜索「容器镜像服务 ACR」→ 左侧「镜像工具」→
-「镜像加速器」，复制形如 `https://xxxx.mirror.aliyuncs.com` 的地址，然后：
+#### 失败了长什么样
+
+```
+=> ERROR [internal] load metadata for docker.io/library/python:3.11-slim
+failed to solve: python:3.11-slim: failed to resolve source metadata for
+docker.io/library/python:3.11-slim: docker.io/library/python:3.11-slim: not found
+```
+
+**构建根本没开始**（Dockerfile 一行都没执行），所以与代码、依赖、`.env` 全都无关，
+纯粹是拉基础镜像的网络问题——**不用怀疑前面的步骤做错了**。
+
+`not found` 和 `i/o timeout` 要分清：
+
+| 报错 | 含义 |
+|---|---|
+| `i/o timeout` / `connection refused` | **没配**加速器，直连 docker.io 被阻断 |
+| `not found`（404） | **配了，但那个加速器已失效**（社区源停服常返回 404 而非超时） |
+
+#### 修复：配多个加速源，别只押一个
+
+阿里云账号有专属免费地址（控制台 → 搜「容器镜像服务 ACR」→「镜像工具」→「镜像加速器」，
+形如 `https://xxxx.mirror.aliyuncs.com`）。但该地址近年对 `library/` 官方镜像也时常失效，
+**建议与社区源并列配置**，Docker 会按顺序 fallback：
 
 ```bash
 mkdir -p /etc/docker
 cat > /etc/docker/daemon.json <<'EOF'
 {
-  "registry-mirrors": ["https://<你的专属地址>.mirror.aliyuncs.com"]
+  "registry-mirrors": [
+    "https://<你的专属地址>.mirror.aliyuncs.com",
+    "https://docker.m.daocloud.io",
+    "https://docker.xuanyuan.me",
+    "https://docker.1ms.run"
+  ]
 }
 EOF
-systemctl restart docker
-docker info | grep -A3 'Registry Mirrors'
+systemctl daemon-reload && systemctl restart docker
 ```
 
-（若已有 `/etc/docker/daemon.json`，**先备份再合并 `registry-mirrors` 字段**，别整个覆盖。）
+> ⚠️ 社区加速源都是自费维护的，**随时可能停服**，所以写多个按序 fallback 比押一个稳。
+> 上面几个是 2026 年社区实测仍在服务的；可用列表由 `github.com/dongyubin/DockerHub`
+> 持续更新，值得收藏。
+>
+> 若已有 `/etc/docker/daemon.json`，**先备份再合并 `registry-mirrors` 字段**，别整个覆盖。
+
+#### 必须验证配置真的生效
+
+```bash
+docker info 2>&1 | grep -A5 'Registry Mirrors'   # 必须能列出你配的地址
+docker pull hello-world                            # 小镜像，快速验证通路
+```
+
+**`docker info` 没有输出 = 配置没生效**，此时 pull 仍会直连 `registry-1.docker.io` 并超时。
+最常见两个原因：
+
+1. **snap 装的 Docker 不读 `/etc/docker/daemon.json`**，而是
+   `/var/snap/docker/current/config/daemon.json`。`get.docker.com` 装的是 apt 包，
+   用 `/etc/docker/` 那个路径，别混淆。
+2. 改完没重启 Docker。
+
+#### 兜底：所有加速源都失效时
+
+`backend/Dockerfile` 的基础镜像已做成可覆盖的 ARG，**不必改文件**就能指向别的仓库：
+
+```bash
+# 先用 curl 探一下哪个代理站活着
+curl -sI --max-time 8 https://docker.m.daocloud.io/v2/ | head -1
+
+BASE_IMAGE=docker.m.daocloud.io/library/python:3.11-slim \
+  docker compose -f docker-compose.backend.yml up -d --build
+```
+
+同理 `docker-compose.yml`（单机版）也支持这个变量。
 
 ### 9.6 第五步：拉代码
 
