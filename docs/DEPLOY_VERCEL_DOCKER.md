@@ -524,7 +524,12 @@ git remote set-url origin https://github.com/solis66/AiTeacher.git
 
 ### 9.7 第六步：把 `.env` 放上去（这一步有两个坑）
 
-必须在**仓库根目录**（不是 `backend/` 下），`docker-compose.backend.yml` 的 `env_file` 指向那里。
+**目标路径是仓库根目录，不是 `backend/` 下。** `docker-compose.backend.yml` 里写的是
+`env_file: - ./.env`，相对 compose 文件所在位置（仓库根）解析。写成
+`/home/admin/AiTeacher/backend/.env` 的话容器读不到 —— 症状是启动后所有变量为空，
+但文件明明"传上去了"，极难排查。
+
+即最终要落在：**`/home/admin/AiTeacher/.env`**（等价于 `~/AiTeacher/.env`）。
 
 #### 坑一：只传 `backend/.env` 是不够的，容器会启动失败
 
@@ -578,8 +583,41 @@ curl -s http://100.100.100.200/latest/meta-data/eipv4
 curl -s ifconfig.me
 ```
 
-**备选方式**（不想用 scp）：在网页终端里用 heredoc 粘贴，注意 `'EOF'` 的引号不能丢，
-否则 `$` 会被 shell 展开：
+#### 推荐方式：base64 单行粘贴（绕开引号与多行粘贴的全部问题）
+
+`.env` 里含 `!` `#` `*` 等 shell 元字符时，heredoc 多行粘贴有被静默改坏的风险。
+**base64 单行**一次解决三件事：字符集只有 `[A-Za-z0-9+/=]`（零 shell 元字符）、
+压成一行（杜绝丢行/行序错乱）、可配合 sha256 做**字节级证明** —— 最后一条 heredoc 做不到。
+
+本地生成（Python；PowerShell 内联易解析失败）：
+
+```python
+import base64, hashlib, subprocess
+data = open(SRC, "rb").read()
+assert b"\r" not in data and not data.startswith(b"\xef\xbb\xbf")   # 必须 LF、无 BOM
+b64  = base64.b64encode(data).decode("ascii")
+print(hashlib.sha256(data).hexdigest())          # 记下来，服务端要拿它比对
+D    = "/home/admin/AiTeacher"
+cmd  = ("echo '%s' | base64 -d > %s/.env && chmod 600 %s/.env "
+        "&& wc -c %s/.env && grep -c '=' %s/.env && sha256sum %s/.env") % (b64, D, D, D, D, D)
+subprocess.Popen("clip", stdin=subprocess.PIPE, shell=True).communicate(cmd.encode("ascii"))
+```
+
+在**网页终端**里粘贴这一整行并回车（不用打开任何编辑器），期望输出：
+
+```
+876 /home/admin/AiTeacher/.env
+8
+a981d87b...  /home/admin/AiTeacher/.env
+```
+
+**sha256 与本地一致 = 服务器上的文件与本地逐字节相同**，密码里的特殊字符一个都没被改。
+对不上说明粘贴被截断，重粘一次即可，不用排查别处。
+
+> ⚠️ `\r` 必须提前查掉：Windows 文件行尾带 CRLF 时，每个值的末尾会多一个不可见字符，
+> 数据库报的是"密码错误"，人眼绝对看不出问题。
+
+#### 备选方式：heredoc 粘贴（值里全无特殊字符时才用）
 
 ```bash
 cat > /home/admin/AiTeacher/.env <<'EOF'
