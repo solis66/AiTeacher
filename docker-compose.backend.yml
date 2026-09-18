@@ -1,0 +1,47 @@
+# 只部署后端容器 —— 配合「前端托管在 Vercel」的场景
+#
+# 用法（服务器上，仓库根目录执行）：
+#   docker compose -f docker-compose.backend.yml up -d --build
+#   docker compose -f docker-compose.backend.yml logs -f
+#
+# 与完整版 docker-compose.yml 的区别：
+#   - 不含 frontend(Nginx) 容器，前端由 Vercel 托管
+#   - backend 直接把宿主机 80 端口映射到容器 8501，云服务器默认放行 80，
+#     无需再去防火墙加规则；换成非标端口(如 8501)就必须手动放行
+#   - 走云厂商内网 pip 源构建，比默认源快很多
+#
+# 需要仓库根目录存在 .env（从 backend/.env 复制过来）：
+#   cp backend/.env .env
+
+services:
+  backend:
+    build:
+      # 构建上下文必须是仓库根：backend/Dockerfile 里是 COPY backend/xxx
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        # 阿里云 ECS 走内网镜像源（仅阿里云内网可达，速度最快）
+        # 腾讯云换成：http://mirrors.cloud.tencent.com/pypi/simple
+        # 其他环境删掉这行，回落到 Dockerfile 里的公网源 mirrors.aliyun.com
+        PIP_INDEX_URL: http://mirrors.cloud.aliyuncs.com/pypi/simple
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      - PORT=8501
+      - FLASK_DEBUG=0
+    ports:
+      # 宿主机 80 → 容器 8501。80 被占用时改左边，如 "8080:8501"
+      - "80:8501"
+    # 运行期数据必须落到宿主机，否则重建容器即丢
+    volumes:
+      - ./backend/history:/app/history
+      - ./backend/data/reviews:/app/data/reviews
+      - ./backend/chroma_db:/app/chroma_db
+    # 依赖 chromadb/onnxruntime，冷启动 1~2 分钟；健康检查给足超时
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8501/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
