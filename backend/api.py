@@ -44,6 +44,7 @@ from utils.text_classifier import classify_text, is_essay_submission as classifi
 from services.consultation_service import answer_consultation, stream_answer_consultation
 from services import consult_context
 from services import user_service
+from utils import db_config
 from utils.chat_memory import normalize_history
 from utils.logger_handler import logger
 from utils.request_helpers import (
@@ -141,8 +142,27 @@ os.makedirs(LOG_DIR, exist_ok=True)
 try:
     user_service.init_users_table()
 except Exception as e:
+    # user_service 抛出的 DatabaseUnavailableError 只带一句通用提示（"数据库连接失败"），
+    # 真正的失败原因（DNS 解析不了 / 端口不通 / 密码不对 / SSL 要求）在 __cause__ 里。
+    # 部署排错全靠这一段，必须把根因展开打印，否则只能看到"连接失败"四个字干瞪眼。
+    _root = e
+    while getattr(_root, '__cause__', None) is not None:
+        _root = _root.__cause__
     print(f"⚠️  用户表初始化失败（注册/登录将不可用）：{e}")
-    logger.warning(f"用户表初始化失败: {e}")
+    if _root is not e:
+        print(f"    根本原因：{type(_root).__name__}: {_root}")
+    _cfg = db_config.get_db_config()
+    print(
+        "    连接参数：host={host} port={port} db={dbname} user={user} "
+        "password={pwstate}".format(
+            host=_cfg['host'], port=_cfg['port'], dbname=_cfg['dbname'],
+            user=_cfg['user'],
+            pwstate=('已设置(len=%d)' % len(_cfg['password'])) if _cfg['password'] else '**【空】**',
+        )
+    )
+    if not _cfg['password']:
+        print("    ↳ 密码为空：容器没读到 .env，检查仓库根目录下 .env 是否存在（不是 backend/.env）")
+    logger.warning("用户表初始化失败: %s | 根因: %s: %s", e, type(_root).__name__, _root)
 
 
 def log_api_request(func):
@@ -2368,7 +2388,40 @@ def check_config():
             'detail': 'Agent未初始化，将在首次使用时尝试初始化'
         })
         result['success'] = False
-    
+
+    # 检查数据库（注册/登录依赖 PostgreSQL）
+    # 这段直接在容器内建一次真实连接，因此测的是「应用实际走的那条路」，
+    # 而不是从宿主机 ping —— 两者结果经常不一致（DNS / 密码 / 出网策略都可能不同）。
+    try:
+        cfg = db_config.get_db_config()
+        if not cfg.get('password'):
+            result['checks'].append({
+                'name': '数据库连接',
+                'status': 'failed',
+                'detail': '密码为空：容器未读到 .env（应在仓库根目录，不是 backend/ 下）',
+            })
+            result['success'] = False
+        else:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=cfg['host'], port=cfg['port'], dbname=cfg['dbname'],
+                user=cfg['user'], password=cfg['password'], connect_timeout=6,
+            )
+            conn.close()
+            result['checks'].append({
+                'name': '数据库连接',
+                'status': 'passed',
+                'detail': f"已连通 {cfg['host']}:{cfg['port']}/{cfg['dbname']}（用户 {cfg['user']}）",
+            })
+    except Exception as e:
+        # 只回显异常自身的文本；psycopg2 的错误信息不会包含密码明文。
+        result['checks'].append({
+            'name': '数据库连接',
+            'status': 'failed',
+            'detail': f'{type(e).__name__}: {e}',
+        })
+        result['success'] = False
+
     return jsonify(result)
 
 
