@@ -1,0 +1,50 @@
+# 构建上下文 = 仓库根（compose 里 context: .），必须显式排除运行期数据与本地环境。
+#
+# 为什么必须有这个文件：
+#   容器跑起来后，卷会把真实数据写进 backend/data/reviews、backend/chroma_db、
+#   backend/history。下一次 docker build 时这些目录就在上下文里，
+#   Dockerfile 的 `COPY backend/ ./` 会把它们一起打进镜像 ——
+#   镜像越建越大（可能到几百 MB），用户数据还会被烤进镜像层。
+#   .gitignore 管不了这个，它是给 git 用的，Docker 只认 .dockerignore。
+#
+# 注意：只作用于 context 为仓库根的构建。frontend 服务用的是 ./frontend 上下文，
+#       走 frontend/.dockerignore，不受本文件影响。
+
+# ---- 版本控制与本地环境 ----
+.git
+.gitignore
+.venv
+venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+# ---- 敏感配置（运行时由 compose 的 env_file 注入，不需进镜像）----
+.env
+**/.env
+
+# ---- 运行期数据（compose 已挂卷到宿主机，绝不能打进镜像）----
+backend/history
+backend/chroma_db
+backend/data/reviews
+**/logs
+*.log
+*.sqlite3
+
+# 运行期索引状态（应用会在服务器上重新生成；打进镜像会带上本机的旧状态）
+**/md5.text
+**/md5_knowledge.text
+**/review_index_state.json
+
+# ---- 前端（后端镜像不需要；前端走 Vercel 或独立的 nginx 容器）----
+frontend
+node_modules
+dist
+
+# ---- 文档与工具状态 ----
+docs
+.workbuddy
+.idea
+.trae
+.DS_Store
+Thumbs.db
