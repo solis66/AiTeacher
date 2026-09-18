@@ -1,0 +1,14 @@
+# 行尾策略：只锁住「CRLF 会直接破坏功能」的文件类型。
+#
+# 为什么需要：本机 core.autocrlf=true，Windows 工作区随时可能被 checkout 成 CRLF。
+# 这些文件一旦带 \r 会出问题，而且报错完全指不到行尾上：
+#   - Dockerfile：RUN 指令末尾多出 \r，会报各种莫名其妙的 command not found
+#   - *.sh：同理，shebang 后带 \r 会让脚本直接跑不起来（bad interpreter）
+#   - docker-compose*.yml：部分版本解析 YAML 时会因 \r 出错
+#
+# 只覆盖这几个模式，不动其他文件，避免全仓库行尾改写带来无谓 diff。
+
+backend/Dockerfile   text eol=lf
+frontend/Dockerfile  text eol=lf
+docker-compose*.yml  text eol=lf
+*.sh                 text eol=lf
