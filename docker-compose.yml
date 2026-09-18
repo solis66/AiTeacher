@@ -9,6 +9,11 @@ services:
       # 若写成 context: ./backend 会导致 COPY 找不到文件、构建直接失败。
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        # 基础镜像可覆盖：国内直连 docker.io 常超时，或被失效镜像源返回 not found。
+        # 加速器不可用时直接指向可用仓库：
+        #   BASE_IMAGE=docker.m.daocloud.io/library/python:3.11-slim docker compose up -d --build
+        BASE_IMAGE: ${BASE_IMAGE:-python:3.11-slim}
     restart: unless-stopped
     env_file:
       - ./.env

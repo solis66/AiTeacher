@@ -2,7 +2,12 @@
 # 说明：pywin32 在 requirements.txt 中标了 sys_platform=="win32"，Linux 下自动跳过，
 #       评分标准自动落到 data/ 下的 .txt（已随代码打包），无需 Word。
 
-FROM python:3.11-slim
+# 基础镜像可覆盖：国内节点直连 docker.io 常超时，或被失效镜像源返回 not found。
+# 默认用官方名（由 /etc/docker/daemon.json 的 registry-mirrors 加速）；
+# 若加速器不可用，可直接指向可用仓库，不必改本文件：
+#   BASE_IMAGE=docker.m.daocloud.io/library/python:3.11-slim
+ARG BASE_IMAGE=python:3.11-slim
+FROM ${BASE_IMAGE}
 
 # 避免 Python 产生 pyc / 控制台输出缓冲
 ENV PYTHONDONTWRITEBYTECODE=1 \
