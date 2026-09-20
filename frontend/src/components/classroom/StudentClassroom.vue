@@ -119,7 +119,7 @@
             <input
               ref="fileInput"
               type="file"
-              accept="image/jpeg,.pdf"
+              accept="image/jpeg,image/png,image/webp,image/bmp,.pdf"
               multiple
               class="visually-hidden"
               @change="onFiles"

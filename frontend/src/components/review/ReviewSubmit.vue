@@ -58,6 +58,7 @@
             <button
               type="button"
               class="ocr-btn"
+              title="支持 JPG / PNG / WebP / BMP，识别后自动填入"
               :disabled="!!ocrBusy[`${index}-title`]"
               @click.prevent.stop="pickOcr(index, 'title')"
             >
@@ -75,6 +76,7 @@
             <button
               type="button"
               class="ocr-btn"
+              title="支持 JPG / PNG / WebP / BMP，识别后自动填入"
               :disabled="!!ocrBusy[`${index}-requirements`]"
               @click.prevent.stop="pickOcr(index, 'requirements')"
             >
@@ -103,7 +105,7 @@
           <input
             ref="fileInputs"
             type="file"
-            accept="image/jpeg,image/png,image/webp,.pdf"
+            accept="image/jpeg,image/png,image/webp,image/bmp,.pdf"
             multiple
             class="visually-hidden"
             @change="onFiles(index, $event)"
@@ -129,11 +131,15 @@
          ⚠️ 它必须放在 v-for 之外：Vue 3 中同名 ref 若位于 v-for 内会被收集成【数组】，
          此时 ocrInput.value 是 [HTMLInputElement] 而不是单个元素，直接 el.click() 会抛
          "el.click is not a function"，表现为点击按钮毫无反应（既无文件框也无报错）。
-         （对照 fileInputs 就在 v-for 内，所以那边必须用 fileInputs.value[index]） -->
+         （对照 fileInputs 就在 v-for 内，所以那边必须用 fileInputs.value[index]）
+
+         另：accept 列表必须与后端 services/review_documents.ALLOWED_IMAGE_FORMATS 保持一致 ——
+         accept 决定选图框里哪些文件「可选」，写窄了用户会直接选不到自己的图片
+         （Windows 截图默认就是 PNG，早先这里只写 image/jpeg，等同于把截图挡在门外）。 -->
     <input
       ref="ocrInput"
       type="file"
-      accept="image/jpeg"
+      accept="image/jpeg,image/png,image/webp,image/bmp"
       class="visually-hidden"
       @change="onOcrPick"
     />

@@ -2280,7 +2280,7 @@ def ocr():
         # 这里刻意不做「作文净化」（原 clean_ocr_text 会丢弃长度 <2 的行）——
         # 题目与题干常含「不少于500字」这类短行，去短行会把它们吃掉。
         from pathlib import Path
-        from services.review_documents import recognize, validate_upload
+        from services.review_documents import recognize, to_jpeg_bytes, validate_upload
         import shutil
         import tempfile
 
@@ -2288,17 +2288,20 @@ def ocr():
         if not raw:
             return jsonify({'success': False, 'message': '图片内容为空，请重新选择'})
 
-        # 与批改上传同一套校验：只收真实 JPEG、单张不超过 20MB，
+        # 与批改上传同一套校验：按真实解码格式放行 JPG/PNG/WebP/BMP、单张不超过 20MB，
         # 比原先只看 content_type 更严格（content_type 是前端声明的，不能信）。
+        # 校验通过后统一转成标准 JPEG 再送 OCR：阿里云对入参格式有要求，
+        # 而 PNG/WebP 常带 alpha 通道、手机照片带 EXIF 方向，改名后直接送会失败或方向错乱。
         try:
             validate_upload(file.filename, raw)
+            jpeg = to_jpeg_bytes(raw)
         except ValueError as exc:
             return jsonify({'success': False, 'message': str(exc)})
 
         tmp_dir = tempfile.mkdtemp(prefix='ocr-')
         try:
             path = Path(tmp_dir) / 'upload.jpg'
-            path.write_bytes(raw)
+            path.write_bytes(jpeg)
             text, _lines = recognize(str(path))
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)

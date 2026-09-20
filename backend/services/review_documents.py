@@ -2,7 +2,7 @@
 作文材料处理模块
 
 职责：
-1. 上传文件真实性校验（图片仅 JPG、PDF 必须未加密且页数受限）
+1. 上传文件真实性校验（图片支持 JPG/PNG/WebP/BMP、PDF 必须未加密且页数受限）
 2. 分页渲染：把 PDF / 图片 / 纯文字统一转成带真实文字行坐标的页面
 3. OCR：调用阿里云文字识别（手写体识别）获取文字与行位置
 4. 定位：把 AI 引用的原句映射回页面坐标（仅接受唯一匹配，绝不伪造位置）
@@ -35,6 +35,15 @@ from utils.win_env import load as _load_win_env
 # （一次请求的全部附件合并为一条批改记录，为后续“批量批改”按作文分组扩展预留）
 MAX_PAGES = 3
 MAX_BYTES = 20 * 1024 * 1024
+# 允许的图片「真实格式」→ 规范化后缀。
+# 2026-09-20 由「仅 JPG」放开为常见位图格式：Windows 截图（含 Win+Shift+S）默认存 PNG、
+# 网页/手机端另存常是 WebP，而这两类恰恰是「作文题目 / 题干要求」拍照截图里最常见的格式；
+# 早先只收 JPG 会把它们挡在选图框之外（前端 accept 过滤）或提交后被拒，用户感受就是"图片传不上去"。
+# 判定只认 PIL 真实解码出的格式，不看扩展名（改扩展名的绕过依然被拦）。
+ALLOWED_IMAGE_FORMATS = {'JPEG': '.jpg', 'PNG': '.png', 'WEBP': '.webp', 'BMP': '.bmp'}
+# 单张图片像素上限：防止有人传一张 100MP 的巨图把渲染/OCR 拖死
+MAX_PIXELS = 25_000_000
+IMAGE_HINT = '图片格式不支持或文件已损坏，请上传 JPG / PNG / WebP / BMP 格式的图片'
 # 纯文字排版参数（用于把无附件的正文生成可批注页面）
 TEXT_PAGE_W, TEXT_PAGE_H = 1000, 1400
 TEXT_LINE_CHARS = 32
@@ -102,35 +111,89 @@ def validate_upload(name, raw):
         raw:  文件二进制内容
 
     返回：
-        str: 规范化后的后缀（.jpg / .pdf）
+        str: 规范化后的后缀（.jpg / .png / .webp / .bmp / .pdf）
 
     异常：
         ValueError: 校验不通过，消息为面向用户的中文提示
+
+    说明：
+        PDF 与图片的分派以「真实内容」为准：扩展名是 .pdf、或文件头是 %PDF，
+        都按 PDF 校验。图片则以 PIL 解码出的真实格式为准，因此
+        「PNG 改名成 .jpg」不会再被误当成 JPEG 放行。
     """
     suffix = Path(name).suffix.lower()
     if len(raw) > MAX_BYTES:
         raise ValueError('单个文件不能超过20MB')
 
-    if suffix == '.pdf':
+    if suffix == '.pdf' or raw[:4] == b'%PDF':
         try:
             with fitz.open(stream=raw, filetype='pdf') as pdf:
                 if pdf.is_encrypted or not 0 < len(pdf) <= MAX_PAGES:
                     raise ValueError()
         except Exception as exc:
             raise ValueError(f'请上传未加密的有效PDF，最多{MAX_PAGES}页') from exc
-    else:
-        try:
-            # 需求：图片只允许 JPG，其他格式统一提示
-            if suffix != '.jpg':
+        return '.pdf'
+
+    try:
+        with Image.open(io.BytesIO(raw)) as img:
+            # 注意：必须在 verify() 之前取出 format —— verify() 之后对象即失效
+            fmt = (img.format or '').upper()
+            if img.width * img.height > MAX_PIXELS:
                 raise ValueError()
-            with Image.open(io.BytesIO(raw)) as img:
-                # 必须真实解码为 JPEG，避免改扩展名的绕过
-                if img.format != 'JPEG' or img.width * img.height > 25_000_000:
-                    raise ValueError()
-                img.verify()
-        except Exception as exc:
-            raise ValueError('请重新输入jpg格式的图片') from exc
-    return suffix
+            img.verify()
+    except Exception as exc:
+        raise ValueError(IMAGE_HINT) from exc
+
+    if fmt not in ALLOWED_IMAGE_FORMATS:
+        raise ValueError(IMAGE_HINT)
+    return ALLOWED_IMAGE_FORMATS[fmt]
+
+
+def to_rgb(image):
+    """
+    把任意模式的位图拍平成 RGB（顺带按 EXIF 摆正方向）。
+
+    透明像素统一垫**白底**：截图、贴纸类 PNG/WebP 常有透明背景，
+    若直接 convert('RGB')，透明区域会变黑，OCR 会把黑底当成大片墨迹。
+
+    参数：
+        image: PIL.Image（调用方负责关闭它）
+
+    返回：
+        PIL.Image: 新的 RGB 图像
+    """
+    image = ImageOps.exif_transpose(image)
+    if image.mode in ('RGBA', 'LA') or (image.mode == 'P' and 'transparency' in image.info):
+        base = Image.new('RGB', image.size, 'white')
+        rgba = image.convert('RGBA')
+        base.paste(rgba, mask=rgba.split()[-1])
+        return base
+    return image.convert('RGB')
+
+
+def to_jpeg_bytes(raw):
+    """
+    把上传的位图统一转成 JPEG 字节流（供只吃标准 JPEG 的下游使用）。
+
+    为什么需要：
+        - 阿里云手写体识别对入参格式有要求，PNG/WebP/BMP 直接改名成 .jpg 送过去并不稳妥；
+        - PNG 常带 alpha 通道（转 JPEG 会失败）、手机照片带 EXIF 方向（不纠正会横过来）。
+        统一在这里做「按 EXIF 摆正 → 垫白底拍平 → 转 RGB → 存 JPEG」。
+
+    返回：
+        bytes: JPEG 内容
+
+    异常：
+        ValueError: 图片无法解码时，消息为面向用户的中文提示
+    """
+    try:
+        with Image.open(io.BytesIO(raw)) as img:
+            image = to_rgb(img)
+            buffer = io.BytesIO()
+            image.save(buffer, format='JPEG', quality=95)
+    except Exception as exc:
+        raise ValueError(IMAGE_HINT) from exc
+    return buffer.getvalue()
 
 
 def recognize(path):
@@ -232,7 +295,8 @@ def prepare_pages(record, directory):
 
     处理策略：
         - PDF：优先取自带文字层（矢量 PDF 精度最高）；无文字层才走 OCR
-        - JPG：一律走 OCR（手写作文图片）
+        - 图片（JPG/PNG/WebP/BMP）：一律走 OCR（手写作文图片）；PIL 解码后统一
+          按 EXIF 摆正、拍平成 RGB 存成 page-N.jpg，所以下游拿到的永远是标准 JPEG
         - 无附件：把正文渲染成分页图片
     """
     if not record['attachments']:
@@ -272,8 +336,8 @@ def prepare_pages(record, directory):
                 raise ValueError(f'一篇作文最多{MAX_PAGES}张图片/页')
             name = f'page-{len(pages) + 1}.jpg'
             with Image.open(path) as image:
-                # 按 EXIF 纠正方向后再保存，确保坐标与展示一致
-                image = ImageOps.exif_transpose(image).convert('RGB')
+                # 按 EXIF 纠正方向、垫白底拍平 alpha 后再保存，确保坐标与展示一致
+                image = to_rgb(image)
                 image.save(directory / name, quality=95)
                 width, height = image.size
             text, lines = recognize(directory / name)
