@@ -33,17 +33,35 @@ class ReactAgent:
         4. 空响应处理：检测并处理AI返回空白的情况
         5. 完善的错误处理：提供明确的错误提示
         6. 状态管理：维护初始化状态，避免重复初始化
+        7. 进程内单例：见 __new__ 说明
     """
-    
+
+    # 进程内单例。api.py 与 services/consultation_service.py 各自 new 过一次，
+    # 若不做收敛就会出现两个互不相干的实例：业务走的是其中一个（consultation_service
+    # 里的那个），而 /health 检查的是另一个（api.py 模块级的那个）。后者在正常路径下
+    # 永远不会被初始化，于是健康检查恒报 agent=unavailable / 503。
+    _singleton = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._singleton is None:
+            cls._singleton = super().__new__(cls)
+        return cls._singleton
+
     def __init__(self):
         """
         初始化ReactAgent
-        
+
         设置：
             _agent: AI代理实例（延迟初始化）
             _initialized: 标记是否已成功初始化
             _last_init_attempt: 上次初始化尝试时间，用于节流
+
+        注意：因为 __new__ 返回单例，__init__ 会被反复调用；这里必须提前返回，
+        否则第二次构造会把已经初始化的 _agent 重置为 None，健康检查随之永久失准。
         """
+        if getattr(self, '_constructed', False):
+            return
+        self._constructed = True
         self._agent = None
         self._initialized = False
         self._last_init_attempt = 0  # 上次初始化尝试时间

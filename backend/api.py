@@ -2307,18 +2307,25 @@ def health():
     
     返回: {"status": "ok", "components": {...}}
     """
+    # agent.is_ready(auto_init=True)：健康检查允许触发一次延迟初始化。
+    # ReactAgent 在正常路径下是懒加载的（首次咨询才构建底层执行器）。若这里只读状态，
+    # 「服务起来了但还没人咨询过」就会一直返回 503 —— 与「真的坏了」表现完全一致，
+    # 无法区分，且会让 Docker healthcheck 永久失败。改为探测时顺带初始化，
+    # 健康检查才真的在回答「AI 依赖现在能不能用」。
+    agent_ready = agent.is_ready(auto_init=True)
+
     status = {
         'status': 'healthy',
         'components': {
             'api': 'running',
             'model': 'available' if chat_model else 'unavailable',
-            'agent': 'available' if agent.is_ready() else 'unavailable',
+            'agent': 'available' if agent_ready else 'unavailable',
             'vector_store': 'available'
         },
         'timestamp': datetime.now().isoformat()
     }
     
-    if not chat_model or not agent.is_ready():
+    if not chat_model or not agent_ready:
         status['status'] = 'unhealthy'
         status['error'] = 'AI服务未就绪'
         return jsonify(status), 503
