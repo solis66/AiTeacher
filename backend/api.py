@@ -1442,8 +1442,8 @@ def register():
     校验手机号/密码/确认密码，写入 PostgreSQL 用户表，返回注册结果
     （注册成功后由前端引导回到登录页登录）
 
-    请求体: {"account": "11位手机号", "password": "xxx", "confirm_password": "xxx"}
-    返回: {"success": true, "message": "注册成功，请登录", "account": "手机号"}
+    请求体: {"account": "账号", "password": "xxx", "confirm_password": "xxx", "role": "teacher|student"}
+    返回: {"success": true, "message": "注册成功，请登录", "account": "账号", "role": "student"}
     """
     data = get_json_body()
     if data is None:
@@ -1451,14 +1451,23 @@ def register():
             return json_error('请求格式错误', '请使用JSON格式提交请求')
         return json_error('请求数据格式错误', '请求体必须是JSON对象')
 
-    # 兼容 username 字段名（前端亦可沿用 username 提交手机号）
+    # 兼容 username 字段名（前端亦可沿用 username 提交账号）
     account = (data.get('account') or data.get('username') or '').strip()
     password = data.get('password') or ''
     confirm = data.get('confirm_password') or data.get('confirmPassword') or ''
+    role = (data.get('role') or user_service.DEFAULT_ROLE).strip().lower()
 
-    # 校验手机号：11 位纯数字
-    if not re.fullmatch(user_service.PHONE_PATTERN, account):
-        return json_error('手机号格式错误', '请输入11位手机号码')
+    # 校验账号：5~20 位字母/数字/下划线（由原先的 11 位手机号放宽）
+    if not re.fullmatch(user_service.ACCOUNT_PATTERN, account):
+        return json_error(
+            '账号格式错误',
+            f"账号需为{user_service.ACCOUNT_MIN_LENGTH}~{user_service.ACCOUNT_MAX_LENGTH}位，"
+            '仅支持字母、数字与下划线，且须以字母或数字开头',
+        )
+
+    # 校验账号类型：只允许老师 / 学生
+    if role not in user_service.VALID_ROLES:
+        return json_error('账号类型错误', '账号类型只能是老师或学生')
 
     # 校验密码：长度 ≥ 6，且仅允许可见 ASCII 字符（字母/数字/特殊符号，无空格/中文/控制符）
     if not password or len(password) < 6:
@@ -1471,14 +1480,14 @@ def register():
         return json_error('两次密码不一致', '两次输入的密码不一致')
 
     try:
-        user_service.create_user(account, password)
+        user_service.create_user(account, password, role)
     except user_service.DuplicateAccountError:
-        return json_error('手机号已注册', '该手机号已注册，请直接登录')
+        return json_error('账号已注册', '该账号已注册，请直接登录')
     except user_service.DatabaseUnavailableError:
         return json_error('数据库不可用', '数据库连接失败，请稍后重试', status=503)
 
-    logger.info("[注册] 新用户注册成功: %s", account)
-    return json_ok('注册成功，请登录', account=account)
+    logger.info("[注册] 新用户注册成功: %s（类型 %s）", account, role)
+    return json_ok('注册成功，请登录', account=account, role=role)
 
 
 @app.route('/login', methods=['POST'])
@@ -1487,8 +1496,9 @@ def login():
     用户登录接口
     从 PostgreSQL 用户表读取账号，用 bcrypt 校验密码，返回JWT令牌
 
-    请求体: {"username": "13727575721", "password": "123456"}
-    返回: {"success": true, "token": "xxx", "username": "13727575721"}
+    请求体: {"username": "admin", "password": "123456"}
+    返回: {"success": true, "token": "xxx", "username": "admin",
+           "role": "teacher", "role_label": "老师"}
     """
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -1503,15 +1513,21 @@ def login():
     try:
         user = user_service.get_user_by_account(username)
         if user and user_service.verify_password(user, password):
+            # 角色写进 token 一并下发：前端据此决定显示老师端还是学生端界面。
+            # 注意这只是「界面分流」依据，真正的权限判定一律在服务端按 users.role 复核。
+            role = user.get('role') or user_service.DEFAULT_ROLE
             token = jwt.encode({
                 'username': user['account'],
+                'role': role,
                 'exp': datetime.utcnow() + timedelta(hours=24)
             }, app.config['SECRET_KEY'])
 
             return jsonify({
                 'success': True,
                 'token': token,
-                'username': user['account']
+                'username': user['account'],
+                'role': role,
+                'role_label': user_service.ROLE_LABELS.get(role, role)
             })
         return jsonify({'success': False, 'error': '用户名或密码错误'}), 401
     except user_service.DatabaseUnavailableError:

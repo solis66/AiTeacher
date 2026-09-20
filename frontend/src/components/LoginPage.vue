@@ -15,22 +15,41 @@
 
       <!-- 登录/注册表单 -->
       <form class="login-form" @submit.prevent="handleSubmit">
-        <!-- 账号（登录=用户名 / 注册=手机号）输入框 -->
+        <!-- 账号（登录=用户名 / 注册=自定义账号）输入框 -->
         <div class="form-group">
-          <label class="form-label">{{ mode === 'register' ? '手机号' : '用户名' }}</label>
+          <label class="form-label">{{ mode === 'register' ? '账号' : '用户名' }}</label>
           <div class="input-wrapper">
             <span class="input-icon"><User :size="16" /></span>
             <input
               type="text"
               v-model="form.username"
               class="form-input"
-              :placeholder="mode === 'register' ? '请输入11位手机号码' : '请输入用户名'"
-              :maxlength="mode === 'register' ? 11 : undefined"
+              :placeholder="mode === 'register' ? '5~20位字母/数字/下划线' : '请输入用户名'"
+              :maxlength="mode === 'register' ? 20 : undefined"
               autocomplete="username"
               @blur="validateUsername"
             />
           </div>
           <span v-if="errors.username" class="error-text">{{ errors.username }}</span>
+        </div>
+
+        <!-- 账号类型（仅注册时显示）：决定登录后可用的功能范围 -->
+        <div v-if="mode === 'register'" class="form-group">
+          <label class="form-label">账号类型</label>
+          <div class="role-picker">
+            <button
+              v-for="opt in roleOptions"
+              :key="opt.value"
+              type="button"
+              class="role-option"
+              :class="{ 'is-active': form.role === opt.value }"
+              @click="form.role = opt.value"
+            >
+              <component :is="opt.icon" :size="18" />
+              <span class="role-name">{{ opt.label }}</span>
+              <span class="role-desc">{{ opt.desc }}</span>
+            </button>
+          </div>
         </div>
 
         <!-- 密码输入框（支持显示/隐藏切换） -->
@@ -117,8 +136,8 @@
 
         <!-- 测试账号提示（仅登录时显示） -->
         <div v-if="mode === 'login'" class="hint-box">
-          <p class="hint-text">测试账号</p>
-          <p class="hint-detail">手机号：13727575721</p>
+          <p class="hint-text">管理测试账号（老师）</p>
+          <p class="hint-detail">账号：admin</p>
           <p class="hint-detail">密码：123456</p>
         </div>
       </form>
@@ -146,10 +165,10 @@
 import { ref, computed, reactive } from 'vue';
 import {
   GraduationCap, User, Lock, Eye, EyeOff,
-  Loader2, AlertCircle, CheckCircle2
+  Loader2, AlertCircle, CheckCircle2, Users
 } from 'lucide-vue-next';
 import request from '../api/request.js';
-import { setToken, setUser } from '../utils/auth.js';
+import { setToken, setUser, setRole } from '../utils/auth.js';
 
 // 定义组件事件：登录成功时触发
 const emit = defineEmits(['login-success']);
@@ -169,8 +188,19 @@ const successMessage = ref('');
 const form = reactive({
   username: '',
   password: '',
-  confirmPassword: ''
+  confirmPassword: '',
+  role: 'student'
 });
+
+/**
+ * 账号类型选项。
+ * 用普通常量数组而非 reactive：选项里存的是组件对象，
+ * 被响应式代理包住会让 Vue 报「组件被做成响应式」的警告。
+ */
+const roleOptions = [
+  { value: 'student', label: '学生', desc: '加入班级、提交作文训练', icon: GraduationCap },
+  { value: 'teacher', label: '老师', desc: '创建班级、发布作文、查看学情', icon: Users }
+];
 
 /**
  * 状态管理变量
@@ -211,9 +241,10 @@ const switchMode = (target) => {
 const validateUsername = () => {
   const value = form.username.trim();
   if (!value) {
-    errors.username = mode.value === 'register' ? '请输入手机号' : '请输入用户名';
-  } else if (mode.value === 'register' && !/^1\d{10}$/.test(value)) {
-    errors.username = '请输入11位手机号码';
+    errors.username = mode.value === 'register' ? '请输入账号' : '请输入用户名';
+  } else if (mode.value === 'register' && !/^[A-Za-z0-9][A-Za-z0-9_]{4,19}$/.test(value)) {
+    // 与后端 user_service.ACCOUNT_PATTERN 保持一致，避免前端放行、后端拒绝
+    errors.username = '账号需为5~20位字母、数字或下划线，且以字母或数字开头';
   } else {
     errors.username = '';
   }
@@ -269,25 +300,29 @@ const togglePasswordVisibility = () => {
  * 提交注册请求
  * 校验通过后调用 POST /register，成功后切回登录模式并预填手机号
  */
+/** 把角色值转成中文名，用于提示文案 */
+const roleLabelOf = (value) => (roleOptions.find((o) => o.value === value)?.label || '');
+
 const handleRegister = async () => {
   const response = await request.post('/register', {
     account: form.username.trim(),
     password: form.password.trim(),
-    confirm_password: form.confirmPassword.trim()
+    confirm_password: form.confirmPassword.trim(),
+    role: form.role
   });
 
   if (response.data.success) {
-    // 注册成功回登录页，携带提示并预填手机号
-    successMessage.value = '注册成功，请登录';
+    // 注册成功回登录页，携带提示并预填账号
+    successMessage.value = `注册成功（${roleLabelOf(form.role) || '学生'}账号），请登录`;
     mode.value = 'login';
     form.password = '';
     form.confirmPassword = '';
-    // 保留已注册的手机号，方便用户直接登录
+    // 保留已注册的账号，方便用户直接登录
     errors.password = '';
     errors.confirmPassword = '';
     return;
   }
-  // 注册失败，显示后端错误（如手机号已注册、格式错误）
+  // 注册失败，显示后端错误（如账号已注册、格式错误）
   loginError.value = response.data.error || response.data.message || '注册失败，请稍后重试';
 };
 
@@ -334,6 +369,8 @@ const handleSubmit = async () => {
       // 保存JWT令牌与用户名到本地存储，用于后续API请求认证与数据归属
       setToken(response.data.token);
       setUser(response.data.username);
+      // 账号类型：决定主界面显示老师端还是学生端入口（权限判定仍在服务端）
+      setRole(response.data.role || '');
 
       // 触发登录成功事件，通知父组件跳转主页面
       emit('login-success', {
@@ -505,6 +542,55 @@ const handleSubmit = async () => {
 .error-text {
   font-size: var(--fs-xs);
   color: var(--c-error);
+}
+
+/* 账号类型选择：两个并排卡片，选中态用主色描边 + 浅底 */
+.role-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.role-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  font-family: inherit;
+  text-align: left;
+  color: var(--c-text-secondary);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color .15s, background-color .15s, color .15s;
+}
+
+.role-option:hover {
+  border-color: var(--c-primary);
+}
+
+.role-option.is-active {
+  color: var(--c-primary);
+  background: var(--c-primary-soft);
+  border-color: var(--c-primary);
+}
+
+.role-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.role-desc {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--c-text-muted);
+}
+
+.role-option.is-active .role-desc {
+  color: var(--c-primary);
+  opacity: .8;
 }
 
 .alert {
