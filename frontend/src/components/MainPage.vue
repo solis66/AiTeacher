@@ -10,6 +10,7 @@
       <div class="navbar-user">
         <span class="user-avatar">{{ currentUser?.charAt(0).toUpperCase() || 'U' }}</span>
         <span class="user-name">{{ currentUser || '用户' }}</span>
+        <span v-if="roleLabel" class="role-badge" :class="`role-badge--${role}`">{{ roleLabel }}</span>
         <button type="button" class="logout-btn" @click="handleLogout">退出</button>
       </div>
     </header>
@@ -98,6 +99,20 @@
           :username="currentUser"
         />
 
+        <!-- 班级：老师看「班级管理」，学生看「我的班级」 -->
+        <TeacherClassroom
+          v-else-if="page === 'classroom' && isTeacher"
+          :username="currentUser"
+          @error="showError"
+        />
+        <StudentClassroom
+          v-else-if="page === 'classroom'"
+          :username="currentUser"
+          @error="showError"
+          @submitted="handleSubmitted"
+          @open-review="openReview"
+        />
+
         <!-- AI 咨询（只读对话，零批改入口；会话列表在全局侧边栏「AI咨询」下） -->
         <section v-else class="consult-page">
           <ChatHistory
@@ -154,25 +169,36 @@
  * - 仅登录取用；各页之间用本地视图切换，不引入 vue-router
  * - AI咨询页为纯 RAG 咨询对话，不挂任何上传/批改表单（零批改入口）
  */
-import { ref, onMounted, reactive, computed } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import {
   Calculator, ClipboardList, BarChart3, MessagesSquare,
-  GraduationCap, Send, Loader2, AlertCircle, Plus
+  GraduationCap, Send, Loader2, AlertCircle, Plus, Users, School
 } from 'lucide-vue-next';
 import request from '../api/request.js';
-import { getToken, getUser, clearAuth } from '../utils/auth.js';
+import { getToken, getUser, clearAuth, getRole, getRoleLabel } from '../utils/auth.js';
 import ChatHistory from './ChatHistory.vue';
 import ReviewRail from './review/ReviewRail.vue';
 import ReviewWorkbench from './review/ReviewWorkbench.vue';
 import ReviewSubmit from './review/ReviewSubmit.vue';
 import LearningReport from './report/LearningReport.vue';
+import TeacherClassroom from './classroom/TeacherClassroom.vue';
+import StudentClassroom from './classroom/StudentClassroom.vue';
 
 const emit = defineEmits(['logout']);
 
-const navItems = reactive([
+// 账号类型（老师 / 学生）：决定侧边栏显示哪些入口与班级页展示哪一端。
+// 真正的权限判定在服务端按 users.role 复核，改这里只能改界面、改不了权限。
+const role = ref(getRole());
+const roleLabel = computed(() => getRoleLabel());
+const isTeacher = computed(() => role.value === 'teacher');
+
+const navItems = computed(() => [
   { key: 'submit', label: '开始批改', icon: Calculator },
   { key: 'results', label: '批改结果', icon: ClipboardList },
   { key: 'profile', label: '学情报告', icon: BarChart3 },
+  isTeacher.value
+    ? { key: 'classroom', label: '班级管理', icon: Users }
+    : { key: 'classroom', label: '我的班级', icon: School },
   { key: 'consult', label: 'AI咨询', icon: MessagesSquare },
 ]);
 
@@ -184,7 +210,7 @@ const currentUser = ref(getUser());
 const PAGE_KEY = 'ai_teacher_last_page';
 const REVIEW_KEY = 'ai_teacher_last_review_id';
 const SESSION_KEY = 'ai_teacher_last_session_id';
-const VALID_PAGES = ['submit', 'results', 'profile', 'consult'];
+const VALID_PAGES = ['submit', 'results', 'profile', 'classroom', 'consult'];
 const storedPage = localStorage.getItem(PAGE_KEY);
 const page = ref(VALID_PAGES.includes(storedPage) ? storedPage : 'submit');
 const activeReviewId = ref(localStorage.getItem(REVIEW_KEY) || null);
@@ -495,6 +521,10 @@ onMounted(async () => {
 .navbar-user { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .user-avatar { display: grid; place-items: center; width: 28px; height: 28px; font-size: var(--fs-sm); font-weight: 600; color: #fff; background: var(--c-primary); border-radius: 50%; }
 .user-name { font-size: var(--fs-sm); color: var(--c-text); }
+/* 账号类型标识：老师用主色、学生用中性色，一眼区分当前登录身份 */
+.role-badge { padding: 2px 8px; font-size: 11px; line-height: 1.6; border-radius: var(--r-pill); }
+.role-badge--teacher { color: #fff; background: var(--c-primary); }
+.role-badge--student { color: var(--c-text-secondary); background: var(--c-bg-muted); }
 .logout-btn { padding: 5px 12px; font-family: inherit; font-size: var(--fs-xs); border: 1px solid var(--c-border); border-radius: var(--r-md); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
 .logout-btn:hover { color: var(--c-error); border-color: var(--c-error); }
 

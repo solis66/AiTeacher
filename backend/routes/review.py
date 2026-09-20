@@ -104,13 +104,29 @@ def create_review():
         # 学生归属：老师代学生提交时填写；学生自己提交时留空，由后端取 owner
         student = request.form.get('student') or ''
 
+        # 作业提交：学生从「我的班级」提交时带上 assignment_id，老师的
+        # 「班级提交 / 班级学情」按它聚合。留空即为普通批改，行为完全不变。
+        assignment_id = (request.form.get('assignment_id') or '').strip() or None
+        if assignment_id:
+            from services.classroom_service import ClassroomError, get_assignment_for_student
+            try:
+                # 必须校验「该学生确实在这个班里」：否则任何人随手填一个作业 id
+                # 就能把作文挂进别人的班级，老师的班级视图会被污染。
+                get_assignment_for_student(assignment_id, owner)
+            except ClassroomError as exc:
+                return jsonify({'success': False, 'message': str(exc)}), 400
+            # 作业提交强制以提交者账号作为学生归属，保证班级统计口径一致
+            # （学生端本来就不提供「学生归属」输入框，这里再兜一层）。
+            student = owner
+
         # 按前端排列顺序收集附件（同名多文件时顺序即为用户排序结果）
         uploads = []
         for storage in request.files.getlist('files'):
             if storage and storage.filename:
                 uploads.append((storage.filename, storage.read()))
 
-        record = workbench.create(owner, grade, essay_type, title, requirements, body, uploads, student)
+        record = workbench.create(owner, grade, essay_type, title, requirements, body, uploads,
+                                  student, assignment_id)
         return jsonify({'success': True, 'data': summarize(record)})
     except ValueError as exc:
         # 校验类错误（含“请重新输入jpg格式的图片”）原样返回给用户

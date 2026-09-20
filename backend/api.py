@@ -58,6 +58,8 @@ from utils.request_helpers import (
 )
 # 批改工作台路由（上传/分页识别/AI批改/保存/导出）
 from routes.review import review_bp
+# 班级与作业路由（老师建班/发作业、学生加班/提交、班级提交与学情）
+from routes.classroom import classroom_bp
 import traceback
 import re
 import os
@@ -75,6 +77,9 @@ app.config['SECRET_KEY'] = 'ai_teacher_secret_key_2026_must_be_at_least_32_bytes
 
 # 注册批改工作台蓝图（提供 /api/review* 系列接口）
 app.register_blueprint(review_bp)
+
+# 注册班级与作业蓝图（/api/class*、/api/assignment*）
+app.register_blueprint(classroom_bp)
 
 # 咨询检索的索引预热：把已有的批改记录同步进向量库（后台线程，不阻塞启动）。
 # 不做成"启动时同步建库并等待"——作文很多时首次建索引要调用 embedding 接口，
@@ -163,6 +168,29 @@ except Exception as e:
     if not _cfg['password']:
         print("    ↳ 密码为空：容器没读到 .env，检查仓库根目录下 .env 是否存在（不是 backend/.env）")
     logger.warning("用户表初始化失败: %s | 根因: %s: %s", e, type(_root).__name__, _root)
+
+# 班级 / 作业相关表（幂等）。失败只告警、不阻塞启动：受影响的是班级功能，
+# 原有的批改、咨询等核心能力不受牵连。
+try:
+    from services import classroom_service as _classroom_service
+    _classroom_service.init_tables()
+except Exception as e:
+    print(f"⚠️  班级相关表初始化失败（班级与作业功能将不可用）：{e}")
+
+# 账号改名后同步迁移批改记录的归属（幂等，可以每次启动都跑）。
+# 批改记录一律以 owner 作为隔离键查询（WHERE owner=?），账号改名后原记录不会报错，
+# 只是再也查不出来 —— 界面上表现为历史批改成果「集体消失」，极易被误判成数据丢失。
+try:
+    from routes.review import workbench as _review_workbench
+    _moved = _review_workbench.store.migrate_owner(
+        user_service.LEGACY_TEST_ACCOUNT, user_service.TEST_ACCOUNT
+    )
+    if _moved:
+        print(f"✅ 已把 {_moved} 条历史批改记录从 {user_service.LEGACY_TEST_ACCOUNT} "
+              f"迁移到 {user_service.TEST_ACCOUNT}")
+        logger.info("批改记录归属迁移完成: %d 条", _moved)
+except Exception as e:
+    print(f"⚠️  批改记录归属迁移失败（不影响启动）：{e}")
 
 
 def log_api_request(func):
