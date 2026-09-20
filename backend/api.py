@@ -2248,37 +2248,44 @@ def ocr():
         if file.filename == '':
             return jsonify({'success': False, 'message': '请选择要上传的图片'})
         
-        # 验证文件类型
-        if not file.content_type.startswith('image/'):
-            return jsonify({'success': False, 'message': '仅支持图片文件'})
-        
-        # 模拟OCR识别结果
-        simulated_text = """
-这也是其一，也不免会被逗笑，但一笑过后，总觉得有点失态。人们有自己的可爱之处，有可爱之处，我们要去模仿人类讨人类的欢喜，这也有些心酸。正如鲁迅所言："造物者创造了一切，都是平等的，人们的这些小聪明，倒看起来有些多事了。" 有些事真的是这样，一些很好的东西被复制多次后，反而叫人反感。
+        # 与作文图片批改共用同一套阿里云 OCR（手写体识别），保证识别口径一致。
+        # 这里刻意不做「作文净化」（原 clean_ocr_text 会丢弃长度 <2 的行）——
+        # 题目与题干常含「不少于500字」这类短行，去短行会把它们吃掉。
+        from pathlib import Path
+        from services.review_documents import recognize, validate_upload
+        import shutil
+        import tempfile
 
-09年春晚凭借《不差钱》红遍全国一夜成名的小沈阳，多少人欣赏他，可春晚过后络绎而来的却是无数翻版的娘娘腔在各个卫视上演，让人看得发腻；当杰克逊逝世后，多少模仿杰克逊的人齐聚电视和网络来比拼谁最像一代歌王，这些也不免有些令人乏味；甚至有不少人把某个歌手的说话方式当做习惯来改变自己，结果徒留的冷笑一声。
+        raw = file.read()
+        if not raw:
+            return jsonify({'success': False, 'message': '图片内容为空，请重新选择'})
 
-每个人的身上有自己的闪光点，何必要刻意模仿别人？再说，外表的浮华可以复制，气质你学的来么？ 从第一部穿越剧《寻秦记》开始，各种各样的穿越戏充斥着人们的视线，穿越自己也风靡一时，本来一个很好的创意被涂抹得再寻常不过了，甚至有下个剧情看都明白的感觉，看多了穿越，上个厕所都感觉马桶像穿越洞……
+        # 与批改上传同一套校验：只收真实 JPEG、单张不超过 20MB，
+        # 比原先只看 content_type 更严格（content_type 是前端声明的，不能信）。
+        try:
+            validate_upload(file.filename, raw)
+        except ValueError as exc:
+            return jsonify({'success': False, 'message': str(exc)})
 
-有大公司招聘，很多人慕名而来，他们看到地上有香蕉皮，旁边还坐着行乞的老人，都以为是公司的测试题，便将香蕉皮捡起，并捐钱给老人，有的甚至买来吃的给老人，结果他们未被录取。很简单，那确实是一道测试题，但他们未被录取的原因是：太社会。
+        tmp_dir = tempfile.mkdtemp(prefix='ocr-')
+        try:
+            path = Path(tmp_dir) / 'upload.jpg'
+            path.write_bytes(raw)
+            text, _lines = recognize(str(path))
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
-如今的社会，需要学习，但更需要创新，需要寻常，但不是千篇一律，单一的复制会使人乏味，东施效颦只会惹来嘲笑，其实简简单单做真实的自己就好。
+        text = (text or '').strip()
+        if not text:
+            return jsonify({'success': False,
+                            'message': '未能从这张图片中识别出文字，请换一张更清晰的图片'})
 
-我写我的文字，我抒自己的情怀，我怜世人的悲哀。
-        """.strip()
-        
-        # 文本净化处理
-        cleaned_text = clean_ocr_text(simulated_text)
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'text': cleaned_text,
-                'raw_text': simulated_text
-            }
-        })
-        
+        return jsonify({'success': True, 'data': {'text': text, 'raw_text': text}})
+
+    except ValueError as exc:
+        return jsonify({'success': False, 'message': str(exc)})
     except Exception as e:
+        logger.exception('[OCR] 识别失败')
         return jsonify({'success': False, 'message': f'OCR识别失败: {str(e)}'})
 
 
