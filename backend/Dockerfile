@@ -45,5 +45,34 @@ COPY backend/ ./
 # 对外端口：api.py 会读取环境变量 PORT（Render 注入），Dockerfile 暴露默认端口便于本地
 EXPOSE 8501
 
-# 生产模式：debug=false，端口取 $PORT 或 8501
-CMD ["python", "api.py"]
+# 生产模式：Gunicorn（gthread worker）替代 Flask 内置的 Werkzeug 开发服务器。
+#
+# 为什么必须换：api.py 结尾是 app.run()，那是开发服务器 —— 每来一个请求就
+# 新起一个线程、没有上限，多人同时用（尤其 AI 咨询的 SSE 长连接各占一个线程
+# 数十秒）时线程数会失控。gthread 换成固定大小的线程池，超出即排队，这才有背压。
+#
+# 参数取舍（改之前请读完）：
+#   -w 1        单 worker 是硬约束，不能改成 2 或更多。两个原因：
+#               ① services/review_workbench.py 的 _GRADE_SEM 是**进程内**信号量，
+#                  多 worker 会让批改并发闸翻倍（N×2），直接打爆下游 AI 接口限流；
+#               ② chromadb 多进程并发写同一目录有数据风险。
+#               要真正多进程，先按 docs/DEPLOY_VERCEL_DOCKER.md 把批改任务拆到
+#               独立 worker 容器（web 层无状态后才能加副本）。
+#   -k gthread  不能用默认的 sync：sync worker 一个进程同时只处理一个请求，
+#               一条 SSE 长连接就会把它锁死，并且会触发 worker timeout 被强杀。
+#   --threads   16 就是真正的并发上限。26.x 的 gthread 是「事件循环 + 线程池」结构：
+#               连接由 worker_connections（默认 1000）兜住，但同一时刻只有 threads
+#               个请求能被真正执行，其余排队 —— 这正是我们要的背压。
+#               I/O 密集（线程大多在等 AI 响应，不占 CPU），故可远多于核数。
+#               2 核 4G 取 16：留出「十几人同时咨询」的余量，再多堆线程收益递减。
+#   --timeout   300。gthread 主循环每秒上报一次心跳（见 workers/gthread.py 的 run()），
+#               正常情况根本不会触发超时；这个值的真实意义是「容忍偶发的 GIL 长时间
+#               阻塞」—— 批改里的 PIL 图片渲染、PDF 导出是 C 扩展长调用，会让主循环
+#               短暂上报不及时。默认 30s 对含图像处理的应用偏紧，一旦误判就会杀掉
+#               worker，连带正在跑的批改线程（那次批改直接变 failed）。
+#   --graceful-timeout 收到重启信号后，等待 in-flight 连接收尾的时间。
+#               ⚠️ 注意它只等 HTTP 连接：后台批改线程不在其中，所以「重启会丢掉
+#               正在跑的批改」这件事无法靠参数解决，要靠拆独立 worker 容器。
+#   ${PORT:-8501} 保留 Render 等平台动态注入端口的兼容性。
+#   用 sh -c + exec：让 gunicorn 成为 PID 1，否则 SIGTERM 收不到、无法优雅重启。
+CMD ["sh", "-c", "exec gunicorn -w 1 -k gthread --threads 16 --timeout 300 --graceful-timeout 60 --access-logfile - --error-logfile - -b 0.0.0.0:${PORT:-8501} api:app"]

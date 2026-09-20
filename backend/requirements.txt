@@ -25,6 +25,11 @@
 # ---- Web 框架 ----
 Flask==3.1.3
 flask-cors==6.0.2
+# 生产 WSGI 服务器。Flask 自带的 app.run() 是 Werkzeug 开发服务器：每来一个请求
+# 就新起一个线程且没有上限，SSE 长连接一多线程数即失控，不能用于对外服务。
+# 用 gthread worker（不能用默认的 sync：一个 worker 同时只处理一个请求，
+# 一条 SSE 会长连接把它锁死）。26.x 移除了 eventlet worker，gthread 仍在且被推荐。
+gunicorn==26.2.0
 
 # ---- 认证与配置 ----
 PyJWT==2.12.1

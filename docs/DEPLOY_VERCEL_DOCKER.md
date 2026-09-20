@@ -186,18 +186,61 @@ Node 侧的图像/导出地址仍走 rewrites，不受影响。
 
 Hobby 计划的带宽与调用次数有上限，且条款上限于非商业用途。毕设演示没问题，对外运营要换 Pro。
 
-### 5.4 后端用的是 Flask 内置服务器
+### 5.4 后端并发：已换成 Gunicorn + gthread worker
 
-`api.py` 结尾是 `app.run(...)`，也就是 Werkzeug 开发服务器：单进程、并发差，多人同时提问会排队。
-演示够用，要抗并发可以在 `backend/requirements.txt` 加 `gunicorn==23.0.0`，并把 Dockerfile 的 CMD 换成：
+`api.py` 结尾是 `app.run(...)`，也就是 Werkzeug **开发服务器**：每来一个请求就新起一个线程、
+**没有上限**。多人同时用的时候（尤其是 AI 咨询的 SSE 流式长连接，一条就要占住一个线程几十秒）
+线程数会失控，服务被拖慢甚至拖垮。
+
+**已改为 Gunicorn gthread**，改动在 `backend/Dockerfile` 与 `backend/requirements.txt`：
 
 ```dockerfile
-# Chroma 与内存都不适合多进程，必须单 worker 多线程
-CMD ["gunicorn", "-w", "1", "-k", "gthread", "--threads", "8", \
-     "--timeout", "600", "-b", "0.0.0.0:8501", "api:app"]
+# 实际写法是一行，此处折行仅为便于阅读
+CMD ["sh", "-c", "exec gunicorn -w 1 -k gthread --threads 16 --timeout 300 \
+     --graceful-timeout 60 --access-logfile - --error-logfile - \
+     -b 0.0.0.0:${PORT:-8501} api:app"]
 ```
 
-注意 `--threads` 与 `-k gthread` 是 SSE 能用的前提；`-w 1` 是因为 Chroma 多进程并发写会出问题，8GB 内存也扛不住多份副本。
+**这四个参数不能随手改，每个都有具体原因：**
+
+| 参数 | 为什么是这个值 |
+|:---|:---|
+| `-w 1` | **不能改成 2 或更多**。① `services/review_workbench.py` 的 `_GRADE_SEM` 是**进程内**信号量，多 worker 会让批改并发闸变成 N×2，直接打爆下游 AI 接口限流（这个闸设成 2 本来就是为了防限流）；② chromadb 多进程并发写同一目录有数据风险。 |
+| `-k gthread` | **不能用默认的 sync**。sync worker 一个进程同时只处理一个请求，一条 SSE 长连接就会把它占死直到回答结束；期间它不接新请求，还会因为长时间不上报心跳被 master 当成卡死而强杀。 |
+| `--threads 16` | 这就是**真正的并发上限**。26.x 的 gthread 是「事件循环 + 线程池」结构：连接由 `worker_connections`（默认 1000）兜住，但同一时刻只有 `threads` 个请求能被真正执行，其余排队 —— 这正是需要的背压。I/O 密集（线程大多在等 AI 响应，不占 CPU），所以可以远多于核数。2 核 4G 取 16，留出「十几人同时咨询」的余量。 |
+| `--timeout 300` | gthread 主循环**每秒上报一次心跳**（`workers/gthread.py` 的 `run()`），正常情况根本不会触发超时。这个值的真实意义是「容忍偶发的 GIL 长时间阻塞」—— 批改里的 PIL 图片渲染、PDF 导出属于 C 扩展长调用，会让主循环短暂上报不及时。默认 30s 对含图像处理的应用偏紧，一旦误判就会杀掉 worker，连带正在跑的批改线程（那次批改直接变 failed）。 |
+
+另外两点：
+
+- **不要开 `--max-requests`**。`-w 1` 下 worker 回收会杀掉正在后台跑的批改线程，任务直接落到 failed。
+- `--graceful-timeout 60` 只等 **HTTP 连接**收尾，后台批改线程不在其中。所以「重启会丢掉正在跑的批改」这件事靠参数解决不了，只能靠把批改拆到独立 worker 容器（下一档改造）。也因此**不要在批改高峰期重启容器**。
+- 用 `sh -c` + `exec` 是刻意的：让 gunicorn 成为 PID 1，否则 `docker stop` / compose 重启发的
+  SIGTERM 传不到它手上，拿不到优雅重启。
+
+#### 并发能力到顶了怎么办
+
+`-w 1` 是架构约束（见上表），所以**单机靠调参数的上限就是这 16 个线程**。
+轻请求（列表、查询）因为处理极快，不受这个数限制；真正会排队的是**同时进行的 AI 咨询**。
+
+如果观察到「多人同时提问时开始排队」，下一步不是加 worker，而是把**批改任务从 web 进程拆出去**
+（独立 worker 容器 + 持久化任务队列），web 层无状态之后才能安全地加副本。那属于另一档改造。
+
+#### 上线前先量一下，别凭感觉扩容
+
+本地放大并发**不等于**吞吐变高 —— 如果瓶颈其实在下游 AI 接口的配额上，加并发只会把
+「偶尔 429」变成「经常 429」。先看这两个信号：
+
+```bash
+# 1) 是 AI 侧限流，还是本地资源打满？
+docker compose logs --tail=200 backend | grep -iE "429|throttl|rate.?limit|timeout"
+free -h && docker stats --no-stream
+
+# 2) 请求是否在排队（gunicorn access log 里的响应时间）
+docker compose logs --tail=100 backend | awk '{print $NF}'
+```
+
+内存/CPU 吃满 → 本地是瓶颈，A 档（本条）已经做到位，继续就得拆 worker 或升配。
+满屏 429/timeout 但机器很闲 → 瓶颈在 AI 侧，应该做队列 + 限流（拆分 worker 那一档），而不是加 worker。
 
 ---
 
