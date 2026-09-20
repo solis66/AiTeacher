@@ -22,9 +22,15 @@ ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 ARG APT_MIRROR=mirrors.aliyun.com
 
 # chromadb / onnxruntime 需要的运行库
+#   libgomp1        —— chromadb / onnxruntime 的 OpenMP 运行时
+#   fonts-wqy-zenhei —— 中文字体。纯文字正文批改（无附件）要把正文渲染成 page-N.jpg，
+#                       PIL 取不到中文字体会直接抛「缺少中文字体」，整次批改 failed。
+#                       该包在 Debian 下的路径是 /usr/share/fonts/truetype/wqy/wqy-zenhei.ttc，
+#                       正是 review_documents.font() 探测的 Linux 路径，勿改名或换包。
 RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true \
     && apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
+        fonts-wqy-zenhei \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

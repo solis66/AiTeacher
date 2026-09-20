@@ -42,14 +42,55 @@ TEXT_LINES_PER_PAGE = 26
 
 
 def font(size=28):
-    """加载可显示中文的字体，用于把纯文字正文渲染成图片页面。"""
-    for path in [os.getenv('REVIEW_FONT_PATH', ''),
-                 'C:/Windows/Fonts/msyh.ttc',
-                 'C:/Windows/Fonts/simhei.ttf',
-                 '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc']:
+    """
+    加载可显示中文的字体，用于把纯文字正文渲染成图片页面。
+
+    背景（这是一个真实事故的修复）：
+        纯文字正文（无附件）批改时必须把正文渲染成 page-N.jpg 才能进中栏画布，
+        这一步依赖中文字体。部署用的 python:3.11-slim 镜像本身不含任何中文字体，
+        Dockerfile 又没装 —— 结果是「粘贴正文点批改」100% 失败，报「缺少中文字体」；
+        而图片批改走 OCR 不需要字体，所以一直是好的，很容易误判成"批改功能偶尔坏"。
+        修复分两处：Dockerfile 安装 fonts-wqy-zenhei（见该文件注释），以及本函数增强探测。
+
+    探测顺序：环境变量 → Windows 字体 → Linux 常见中文字体 → 扫描字体目录兜底。
+    """
+    candidates = [
+        os.getenv('REVIEW_FONT_PATH', ''),
+        'C:/Windows/Fonts/msyh.ttc',
+        'C:/Windows/Fonts/msyhbd.ttc',
+        'C:/Windows/Fonts/simhei.ttf',
+        'C:/Windows/Fonts/simsun.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc',
+        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+        '/usr/share/fonts/truetype/arphic/uming.ttc',
+        '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
+    ]
+    for path in candidates:
         if path and Path(path).exists():
             return ImageFont.truetype(path, size)
-    raise ValueError('缺少中文字体，请配置 REVIEW_FONT_PATH 环境变量')
+
+    # 兜底：有些基础镜像把字体装在别处，按文件名特征扫一遍常见目录，
+    # 避免因为路径不同就报"缺字体"。
+    import glob
+    keywords = ('cjk', 'wqy', 'zenhei', 'microhei', 'uming', 'ukai', 'droidsansfallback')
+    for pattern in ('/usr/share/fonts/**/*.ttc',
+                    '/usr/share/fonts/**/*.otf',
+                    '/usr/share/fonts/**/*.ttf'):
+        for path in sorted(glob.glob(pattern, recursive=True)):
+            if any(k in os.path.basename(path).lower() for k in keywords):
+                try:
+                    return ImageFont.truetype(path, size)
+                except OSError:
+                    continue
+
+    raise ValueError(
+        '服务器缺少中文字体，无法生成作文正文页面。'
+        '请在部署镜像中安装中文字体（Debian/Ubuntu：apt-get install -y fonts-wqy-zenhei），'
+        '或用 REVIEW_FONT_PATH 环境变量指定字体文件路径后重启服务。'
+    )
 
 
 def validate_upload(name, raw):
