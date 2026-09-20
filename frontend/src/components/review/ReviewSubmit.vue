@@ -86,15 +86,6 @@
           <textarea v-model="essay.requirements" class="ui-textarea" rows="2" placeholder="例如：不少于500字，结合自身经历"></textarea>
         </label>
 
-        <!-- 题目/题干识图共用一个隐藏选择器，选中后由 ocrTarget 决定回填到哪个字段 -->
-        <input
-          ref="ocrInput"
-          type="file"
-          accept="image/jpeg"
-          class="visually-hidden"
-          @change="onOcrPick"
-        />
-
         <label class="field">
           <span class="field-label">作文正文</span>
           <textarea v-model="essay.body" class="ui-textarea body-box" placeholder="在此输入作文正文，或上传作文图片/PDF"></textarea>
@@ -133,6 +124,19 @@
         >移除本篇</button>
       </article>
     </div>
+
+    <!-- 题目/题干识图共用一个隐藏选择器（全组件仅此一个），选中后由 ocrTarget 决定回填到哪个字段。
+         ⚠️ 它必须放在 v-for 之外：Vue 3 中同名 ref 若位于 v-for 内会被收集成【数组】，
+         此时 ocrInput.value 是 [HTMLInputElement] 而不是单个元素，直接 el.click() 会抛
+         "el.click is not a function"，表现为点击按钮毫无反应（既无文件框也无报错）。
+         （对照 fileInputs 就在 v-for 内，所以那边必须用 fileInputs.value[index]） -->
+    <input
+      ref="ocrInput"
+      type="file"
+      accept="image/jpeg"
+      class="visually-hidden"
+      @change="onOcrPick"
+    />
 
     <button
       v-if="mode === 'batch' && essays.length < 2"
@@ -213,10 +217,13 @@ const onFiles = (index, event) => {
 };
 const removeFile = (index, fi) => { essays[index].files.splice(fi, 1); };
 
-/** 打开识图选择器，并记下这次结果该回填到哪个字段 */
+/** 打开识图选择器，并记下这次结果该回填到哪个字段。
+ *  ocrInput 位于 v-for 之外（全组件唯一），正常时 ocrInput.value 就是单个 HTMLInputElement。
+ *  兼容处理：万一日后被误移回 v-for 内，ref 会退化成数组，这里取第 index 个而非整体 click。 */
 const pickOcr = (index, field) => {
   ocrTarget.value = { index, field };
-  const el = ocrInput.value;
+  const raw = ocrInput.value;
+  const el = Array.isArray(raw) ? raw[index] : raw;
   if (el) el.click();
 };
 
