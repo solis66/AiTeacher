@@ -46,6 +46,7 @@ from services import consult_context
 from services import user_service
 from utils import db_config
 from utils.chat_memory import normalize_history
+from utils.file_lock import file_lock
 from utils.logger_handler import logger
 from utils.request_helpers import (
     SUPPORTED_ESSAY_TYPES,
@@ -1281,13 +1282,14 @@ def chat():
 
     message = data.get('message', '')
     user_selected_essay_type = data.get('essay_type', '')
-    # 对话记忆：前端传来的本会话最近轮次。
-    # 服务端强制重新裁剪（轮次上限、单条长度、合计长度），不信任前端传的规模。
-    history = normalize_history(data.get('history'))
-    if not history:
-        # 前端未携带上下文时，回退到服务端持久化的咨询记录（按天 Markdown 中最近一次会话），
-        # 保证刷新页面或更换设备后 AI 仍能续接前文
-        history = normalize_history(latest_session_messages(get_request_username()))
+
+    # 获取当前用户（从请求头或会话中）
+    current_user = get_request_username()
+
+    # 会话记忆归服务端所有：上下文优先从服务端会话读取，客户端只回传 session_id。
+    # 客户端 history 仅在服务端查无此会话时兜底（例如容器重建丢失 history 目录）。
+    session_id, history = resolve_chat_session(
+        current_user, data.get('session_id'), data.get('history'))
 
     # 咨询检索范围：role 决定"我"能否解析为学生本人。
     # 这里只是**意图声明**，不是安全边界——真正的数据隔离由 owner（X-Username）
@@ -1296,9 +1298,6 @@ def chat():
     if role not in ('student', 'auto'):
         role = 'auto'
     student_hint = (data.get('student') or '').strip()[:40]
-
-    # 获取当前用户（从请求头或会话中）
-    current_user = get_request_username()
 
     # 验证消息内容
     if not message or not isinstance(message, str):
@@ -1364,13 +1363,41 @@ def chat():
         elif text_type == 'consultation':
             # 前端请求流式输出时（stream=true），咨询回答按 SSE 逐 token 增量推送
             if data.get('stream') is True:
+                # 会话ID在生成器启动前定下来：前端收到 session 事件后即可持久化它，
+                # 刷新页面/换设备时继续同一会话
+                stream_session_id = session_id or _free_session_id(current_user, datetime.now())
+
                 def _consult_stream():
-                    """把流式咨询事件编码为 SSE 帧，交给前端增量渲染。"""
-                    for evt in stream_answer_consultation(
-                            message, history, owner=current_user, role=role, student=student_hint):
-                        yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
-                    # 兜底保证「结束」信号一定送达（事件流若出错前已收尾，这里不重复发已发过的 done）
-                    yield "data: {\"type\":\"done\"}\n\n"
+                    """把流式咨询事件编码为 SSE 帧，并在完整回答生成后落盘。"""
+                    def frame(payload):
+                        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+                    parts = []
+                    failed = False
+                    yield frame({'type': 'session', 'session_id': stream_session_id})
+                    try:
+                        for evt in stream_answer_consultation(
+                                message, history, owner=current_user, role=role, student=student_hint):
+                            evt_type = evt.get('type')
+                            if evt_type == 'delta':
+                                parts.append(evt.get('content') or '')
+                            elif evt_type == 'error':
+                                failed = True
+                            elif evt_type == 'done':
+                                break
+                            yield frame(evt)
+                    except Exception as exc:
+                        # 生成器里抛异常会让连接直接断开，前端只能看到"网络错误"；
+                        # 转成 error 事件并照常收尾，保证 done 一定送达。
+                        logger.error('[Chat] 流式咨询异常: %s', exc, exc_info=True)
+                        failed = True
+                        yield frame({'type': 'error', 'content': '抱歉，我暂时无法回答这个问题，请稍后重试。'})
+                    # 先落盘再发 done：前端收到 done 会立刻停止读取，
+                    # 放在后面可能因连接关闭而丢最后一轮。
+                    # 出错或回答为空时不写，避免把错误提示当成 AI 的历史回答。
+                    if not failed and parts:
+                        append_chat_turn(current_user, stream_session_id, message, ''.join(parts))
+                    yield frame({'type': 'done'})
 
                 sse_resp = Response(_consult_stream(), mimetype='text/event-stream')
                 sse_resp.headers['Cache-Control'] = 'no-cache'
@@ -1415,6 +1442,8 @@ def chat():
                     'response_type': 'ai',
                     'raw_response': response  # 确保前端能获取到响应内容
                 }
+            # 非流式同样由服务端落盘；返回的 session_id 让前端继续同一会话
+            session_id = append_chat_turn(current_user, session_id, message, response)
         else:
             # 未知类型，降级到原有的咨询方式
             logger.warning(f"[Chat] 文本类型未知({text_type})，使用原有咨询方式")
@@ -1439,7 +1468,8 @@ def chat():
         return jsonify({
             'success': True,
             'data': parsed,
-            'raw_response': response
+            'raw_response': response,
+            'session_id': session_id
         })
     except ValueError as e:
         logger.warning(f"[Chat] 数据验证错误: {str(e)}")
@@ -1628,6 +1658,10 @@ CONSULT_RETENTION_DAYS = 7
 # 单次保存的最大消息条数，防止异常超长写入
 MAX_SESSION_MESSAGES = 200
 
+# 会话ID完整格式。客户端会把 session_id 回传，必须严格匹配，
+# 避免把任意字符串拼进天级文件名（路径穿越）。
+SESSION_ID_FULL_PATTERN = re.compile(r'^\d{4}-\d{2}-\d{2}_\d{6}$')
+
 # 天级文件名：'13727575721_consult_2026-09-17.md'
 DAY_FILE_PATTERN = re.compile(r'^(.+)_consult_(\d{4}-\d{2}-\d{2})\.md$')
 # 会话标题行：'## 会话 · 09:31:07'
@@ -1758,9 +1792,12 @@ def _normalize_messages(history):
 
     返回：
         list - [{'role': 'user'|'assistant', 'content': str, 'time': 'YYYY-MM-DD HH:MM:SS'}]
+
+    注意：超出上限时保留最近的条目，而不是最早的——服务端会持续追加写入，
+    若保留最早的 200 条，会话会永远停在开头，新消息全部丢失。
     """
     messages = []
-    for item in (history or [])[:MAX_SESSION_MESSAGES]:
+    for item in (history or [])[-MAX_SESSION_MESSAGES:]:
         if not isinstance(item, dict):
             continue
         if item.get('role') not in ('user', 'assistant'):
@@ -1800,7 +1837,7 @@ def _read_day_sessions(username, date_str):
 
 def _write_day_sessions(username, date_str, sessions):
     """
-    把会话列表写回某一天的 Markdown 文件
+    把会话列表写回某一天的 Markdown 文件（原子替换）
 
     参数：
         username: string - 用户名
@@ -1809,15 +1846,37 @@ def _write_day_sessions(username, date_str, sessions):
 
     返回：
         boolean - 是否写入成功
+
+    注意：这里先写临时文件再 os.replace 原子替换。读取方（/get_history）
+    不加锁，若直接覆盖写，读者可能读到写了一半的文档，反解析后整段消息消失。
     """
     path = history_day_path(username, date_str)
+    tmp_path = f'{path}.tmp'
     try:
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             f.write(render_day_markdown(username, date_str, sessions))
+        os.replace(tmp_path, path)
         return True
     except Exception as e:
         logger.error(f"保存咨询记录失败({path}): {e}")
         return False
+
+
+def _history_write_lock(username, date_str):
+    """
+    天级咨询记录文件的跨进程写锁（同一天的所有会话共用一个文件）
+
+    参数：
+        username: string - 用户名
+        date_str: string - 'YYYY-MM-DD'
+
+    返回：
+        上下文管理器 - with 语句内完成「读整天文件 → 改会话 → 写回」
+
+    锁文件与数据文件分开（*.md.lock）：删除会话文件时不会连锁一起删掉，
+    也不会与 Markdown 自身的读写句柄冲突。
+    """
+    return file_lock(f'{history_day_path(username, date_str)}.lock')
 
 
 def _session_moment(messages, date_hint, fallback):
@@ -2064,25 +2123,25 @@ def latest_session_messages(username):
     return load_session(username, sessions[0]['session_id'])
 
 
-def save_session(username, session_id, history):
+def _save_session_locked(username, session_id, history, now):
     """
-    保存一个会话（同一天的所有会话共用同一个 Markdown 文件）
+    保存会话的实质实现（调用方**必须**已持有该天级文件的写锁）
 
     参数：
         username: string - 用户名
-        session_id: string - 会话ID；为空时按当前时间新建会话
+        session_id: string - 会话ID；为空/非法时按 now 生成当天会话
         history: list - 该会话完整消息列表
+        now: datetime - 本轮写入的统一时间基准
 
     返回：
-        dict|None - {'session_id': str, 'date': 'YYYY-MM-DD'}；保存失败返回 None
+        dict|None - {'session_id': str, 'date': 'YYYY-MM-DD'}；写入失败返回 None
     """
-    now = datetime.now()
     session_id = (session_id or '').strip()
-    date_str = str(session_id).split('_')[0] if session_id else ''
-    # 会话ID非法时退回当天新会话，避免把数据写进错误的天级文件
-    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
-        session_id = now.strftime(SESSION_ID_FORMAT)
-        date_str = session_id.split('_')[0]
+    # 会话ID非法时退回当天新会话，避免把数据写进错误的天级文件。
+    # ID 生成必须在锁内：两个进程同时"发现同秒ID未占用"会选中同一个ID。
+    if not is_valid_session_id(session_id):
+        session_id = _free_session_id(username, now)
+    date_str = session_id.split('_')[0]
 
     messages = _normalize_messages(history)
     sessions = _read_day_sessions(username, date_str)
@@ -2101,6 +2160,95 @@ def save_session(username, session_id, history):
     return {'session_id': session_id, 'date': date_str}
 
 
+def save_session(username, session_id, history):
+    """
+    保存一个会话（同一天的所有会话共用同一个 Markdown 文件）
+
+    参数：
+        username: string - 用户名
+        session_id: string - 会话ID；为空时按当前时间新建会话
+        history: list - 该会话完整消息列表
+
+    返回：
+        dict|None - {'session_id': str, 'date': 'YYYY-MM-DD'}；保存失败返回 None
+
+    写锁粒度为「天级文件」：同一天的会话落在同一个 Markdown 里，跨天互不影响；
+    session_id 为空时按今天加锁，新ID在锁内生成。
+    """
+    now = datetime.now()
+    session_id = (session_id or '').strip()
+    date_str = session_id.split('_')[0] if is_valid_session_id(session_id) else now.strftime('%Y-%m-%d')
+    with _history_write_lock(username, date_str):
+        return _save_session_locked(username, session_id, history, now)
+
+
+def is_valid_session_id(session_id):
+    """校验会话ID是否为服务端生成的标准格式（'YYYY-MM-DD_HHMMSS'）。"""
+    return bool(SESSION_ID_FULL_PATTERN.match(str(session_id or '').strip()))
+
+
+def resolve_chat_session(username, session_id, client_history):
+    """
+    确定本轮对话的会话ID与注入模型的历史消息。
+
+    优先级（这是「服务端持有记忆」的核心）：
+        1. 服务端存在该会话 → 以服务端消息为唯一上下文来源；
+        2. 服务端查无此会话（如容器重建丢了文件）→ 回退客户端传来的 history；
+        3. 客户端连 history 字段都没传（旧版客户端）→ 用最近一个会话续接。
+
+    注意：session_id 为空表示「新对话」，此时必须给空上下文。
+    否则「新对话」会静默续接上一个会话——这是旧实现的隐性 bug。
+
+    返回：
+        tuple - (session_id, history)；history 已按 chat_memory 的上限裁剪
+    """
+    session_id = (session_id or '').strip()
+    if session_id and not is_valid_session_id(session_id):
+        session_id = ''
+    if session_id:
+        stored = load_session(username, session_id)
+        if stored:
+            return session_id, normalize_history(stored)
+    if client_history is None and not session_id:
+        return session_id, normalize_history(latest_session_messages(username))
+    return session_id, normalize_history(client_history)
+
+
+def append_chat_turn(username, session_id, user_text, assistant_text):
+    """
+    把一轮问答追加到会话并落盘，返回最终使用的 session_id。
+
+    best-effort：落盘失败只记日志，绝不把异常抛给调用方——
+    历史存储不可用不该让用户收不到已经生成好的回答。
+    只保存完整回答；调用方需保证 assistant_text 是完整内容（流式中断不落盘）。
+    """
+    user_text = (user_text or '').strip()
+    assistant_text = (assistant_text or '').strip()
+    if not user_text or not assistant_text:
+        return session_id
+    try:
+        now = datetime.now()
+        sid = session_id if is_valid_session_id(session_id) else ''
+        date_str = sid.split('_')[0] if sid else now.strftime('%Y-%m-%d')
+        # 读与写必须在同一把跨进程锁内：锁外读、锁内写等于没锁，
+        # 两个进程仍会基于同一份旧内容各自写回，后写者覆盖前者。
+        with _history_write_lock(username, date_str):
+            messages = load_session(username, sid) if sid else []
+            # 新会话由服务端生成ID，客户端只负责保存下发的值
+            if not sid:
+                sid = _free_session_id(username, now)
+            stamp = now.strftime('%Y-%m-%d %H:%M:%S')
+            messages = messages + [
+                {'role': 'user', 'content': user_text, 'time': stamp},
+                {'role': 'assistant', 'content': assistant_text, 'time': stamp},
+            ]
+            saved = _save_session_locked(username, sid, messages, now)
+            return (saved or {}).get('session_id') or sid
+    except Exception as exc:
+        logger.warning('[咨询会话] 追加落盘失败: %s', exc)
+        return session_id
+
+
 def delete_session(username, session_id):
     """
     删除指定会话（当天没有其它会话时一并删除天级文件）
@@ -2113,22 +2261,24 @@ def delete_session(username, session_id):
         boolean - 是否删除成功
     """
     date_str = str(session_id or '').split('_')[0]
-    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+    if not is_valid_session_id(session_id):
         return False
 
-    sessions = _read_day_sessions(username, date_str)
-    kept = [session for session in sessions if session['session_id'] != session_id]
-    if len(kept) == len(sessions):
-        return False
-
-    if not kept:
-        try:
-            os.remove(history_day_path(username, date_str))
-            return True
-        except OSError as e:
-            logger.error(f"删除咨询记录文件失败: {e}")
+    # 与追加写入共用同一把天级文件锁：删除期间的读-改-写不能与追加交错
+    with _history_write_lock(username, date_str):
+        sessions = _read_day_sessions(username, date_str)
+        kept = [session for session in sessions if session['session_id'] != session_id]
+        if len(kept) == len(sessions):
             return False
-    return _write_day_sessions(username, date_str, kept)
+
+        if not kept:
+            try:
+                os.remove(history_day_path(username, date_str))
+                return True
+            except OSError as e:
+                logger.error(f"删除咨询记录文件失败: {e}")
+                return False
+        return _write_day_sessions(username, date_str, kept)
 
 
 def delete_all_sessions(username):
@@ -2151,11 +2301,13 @@ def delete_all_sessions(username):
         matched = DAY_FILE_PATTERN.match(entry)
         if not matched or matched.group(1) != username:
             continue
-        try:
-            os.remove(os.path.join(HISTORY_DIR, entry))
-            removed += 1
-        except OSError as e:
-            logger.error(f"删除咨询记录文件失败({entry}): {e}")
+        # 逐个文件加锁再删：避免与正在追加写入的请求交错（对方可能刚读、正要写回）
+        with _history_write_lock(username, matched.group(2)):
+            try:
+                os.remove(os.path.join(HISTORY_DIR, entry))
+                removed += 1
+            except OSError as e:
+                logger.error(f"删除咨询记录文件失败({entry}): {e}")
     return removed
 
 

@@ -237,12 +237,17 @@ const isLoading = ref(false);
 // 会话列表（服务端按天存储，仅返回最近 7 天）
 const sessions = ref([]);
 const sessionsLoading = ref(false);
-// 当前打开的会话ID：空串表示「新对话」，首次保存时由服务端生成
+// 当前打开的会话ID：空串表示「新对话」，首次回答时由服务端生成并下发
 const currentSessionId = ref(localStorage.getItem(SESSION_KEY) || '');
 
+/** 服务端下发的会话ID落地：只保存，不触发任何保存请求 */
+const applySessionId = (id) => {
+  if (!id || id === currentSessionId.value) return;
+  currentSessionId.value = id;
+  localStorage.setItem(SESSION_KEY, id);
+};
+
 const CONSULT_HISTORY_MAX = 6;
-// 单次持久化的最大消息条数（与后端 MAX_SESSION_MESSAGES 对齐）
-const CONSULT_PERSIST_MAX = 200;
 
 /** 把会话列表按天分组（列表已按时间倒序，同一天的记录天然相邻） */
 const sessionGroups = computed(() => {
@@ -331,7 +336,15 @@ const handleConsultSend = async () => {
     const res = await fetch('/chat', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ message: text, type: 'consultation', stream: true, history: historyPayload })
+      body: JSON.stringify({
+        message: text,
+        type: 'consultation',
+        stream: true,
+        // 会话记忆归服务端所有：这里只声明「在哪个会话里提问」，
+        // history 仅用于服务端文件丢失时兜底
+        session_id: currentSessionId.value || '',
+        history: historyPayload
+      })
     });
 
     const contentType = res.headers.get('content-type') || '';
@@ -339,6 +352,8 @@ const handleConsultSend = async () => {
       // 非流式兜底：后端未按 SSE 返回时，按整段 JSON 处理
       const data = await res.json();
       if (res.ok && data.success) {
+        // 非流式响应同样可能带上服务端分配的会话ID，落地后下次提问才能续上同一会话
+        applySessionId(data.session_id);
         const d = data.data;
         pending.content = d.raw_response || d.overall_comment || '（无回复）';
       } else {
@@ -362,7 +377,10 @@ const handleConsultSend = async () => {
           if (!payload) continue;
           try {
             const evt = JSON.parse(payload);
-            if (evt.type === 'delta' && evt.content) {
+            if (evt.type === 'session') {
+              // 服务端在建会话/续会话时先下发 session_id，后续提问必须带同一个ID
+              applySessionId(evt.session_id);
+            } else if (evt.type === 'delta' && evt.content) {
               pending.content += evt.content;
             } else if (evt.type === 'error') {
               errorText = evt.content || '处理请求失败，请稍后重试。';
@@ -384,19 +402,12 @@ const handleConsultSend = async () => {
     pending.type = 'normal';
     pending.status = '';
     isLoading.value = false;
-    // 问答结束后把最新会话持久化，供下次刷新/咨询恢复
-    saveHistoryToServer();
+    // 服务端已在回答完成时落盘，这里只刷新侧边栏会话列表（标题/条数）
+    loadSessions();
   }
 };
 
-// ---------------- 咨询历史持久化（按天/会话存储，跨刷新恢复，且作为 AI 上下文） ----------------
-/** 把 messages 裁剪成持久化所需的 {role, content, timestamp} 列表 */
-const toPersistedHistory = () => messages.value
-  .filter((m) => (m.role === 'user' || m.role === 'assistant')
-    && typeof m.content === 'string' && m.content.trim())
-  .slice(-CONSULT_PERSIST_MAX)
-  .map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp || null }));
-
+// ---------------- 咨询历史读取（按天/会话由服务端存储，跨刷新恢复） ----------------
 /** 服务端时间字符串（'YYYY-MM-DD HH:MM:SS'）转毫秒时间戳 */
 const toTimestamp = (text) => {
   const parsed = Date.parse(String(text || '').replace(' ', 'T'));
@@ -446,33 +457,12 @@ const openSession = async (session) => {
   }
 };
 
-/** 开启新对话：清空当前会话，首次提问保存时由服务端生成新会话ID */
+/** 开启新对话：清空当前会话，首次提问时由服务端生成新会话ID */
 const startNewConversation = () => {
   currentSessionId.value = '';
   localStorage.removeItem(SESSION_KEY);
   messages.value = [];
   inputText.value = '';
-};
-
-/** 把当前会话全量落盘到服务器（同一天的会话归入同一个 Markdown 文件） */
-const saveHistoryToServer = async () => {
-  const payload = toPersistedHistory();
-  if (!payload.length) return;
-  try {
-    const res = await request.post('/save_history', {
-      session_id: currentSessionId.value || '',
-      history: payload
-    });
-    if (res.data?.success && res.data.session_id) {
-      if (res.data.session_id !== currentSessionId.value) {
-        currentSessionId.value = res.data.session_id;
-        localStorage.setItem(SESSION_KEY, res.data.session_id);
-      }
-      await loadSessions();
-    }
-  } catch (error) {
-    console.warn('[MainPage] 保存咨询历史失败:', error?.message || error);
-  }
 };
 
 // ---------------- 登出 ----------------
