@@ -14,6 +14,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, AIMessageChunk
 from model.factory import chat_model, get_chat_model, is_model_initialized
 from utils.prompt_loader import load_system_prompts
+from utils.model_fallback import system_message, to_chat_messages
 from agent.tools.agent_tools import search_knowledge
 from agent.tools.middleware import monitor_tool, log_before_model, limit_tools_after_budget
 from utils.error_handler import ServiceUnavailableError
@@ -291,7 +292,29 @@ class ReactAgent:
                 print(f"[ReactAgent] 字符串解析失败: {str(e)}")
         
         return str(new_content) if new_content else ""
-    
+
+    def _direct_model_fallback(self, messages):
+        """
+        Agent/图执行失败后的直接模型调用（保留系统提示词与完整消息序列）。
+
+        此前的兜底是 chat_model.invoke(query)：系统提示词没带（角色设定与
+        「不得编造分数、出处」等硬约束全部失效），历史轮次也没带（接不上前文）。
+        降级只应降"能力"（没有工具、没有图编排），不能降"约束"。
+
+        参数：
+            messages: list[dict] - 已裁剪的历史轮次 + 本轮提问（即 execute_stream 里的 messages）
+
+        返回：
+            str - 模型返回的正文
+        """
+        payload = []
+        system = system_message()
+        if system is not None:
+            payload.append(system)
+        payload.extend(to_chat_messages(messages))
+        response = chat_model.invoke(payload)
+        return response.content if hasattr(response, 'content') else str(response)
+
     def execute_stream(self, query: str, history=None, _retried: bool = False):
         """
         流式执行查询，返回AI生成的增量内容
@@ -521,8 +544,7 @@ class ReactAgent:
             try:
                 global chat_model
                 if chat_model:
-                    response = chat_model.invoke(query)
-                    content = response.content if hasattr(response, 'content') else str(response)
+                    content = self._direct_model_fallback(messages)
                     if content and content.strip():
                         print(f"[ReactAgent] 直接调用模型成功，内容长度: {len(content)}")
                         yield content
@@ -539,8 +561,7 @@ class ReactAgent:
             try:
                 print("[ReactAgent] 尝试直接调用模型作为最终备用方案")
                 if chat_model:
-                    response = chat_model.invoke(query)
-                    content = response.content if hasattr(response, 'content') else str(response)
+                    content = self._direct_model_fallback(messages)
                     if content and content.strip():
                         print(f"[ReactAgent] 直接调用模型成功，内容长度: {len(content)}")
                         yield content

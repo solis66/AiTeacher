@@ -20,10 +20,12 @@
 
 from typing import Optional, Dict, Any, Tuple, Iterator
 from model.factory import get_chat_model, is_model_initialized
+from langchain_core.messages import HumanMessage
 from agent.tools.react_agent import ReactAgent
 from services import consult_context
 from utils.standard_loader import load_unified_standard
 from utils.chat_memory import build_history_block
+from utils.model_fallback import system_message
 import logging
 import re
 
@@ -579,6 +581,28 @@ class ConsultationService:
 
 如果有其他关于作文写作的问题，我很乐意为你解答！"""
     
+    def _invoke_model(self, prompt: str):
+        """
+        带系统提示词调用模型（降级路径专用）。
+
+        降级此前是 model.invoke(prompt)：system prompt 里的角色设定与
+        「不得编造分数、出处」等硬约束全部丢失，同一个问题会给出与主路径
+        口径不一致的回答。降级可以没有工具，但不能没有约束。
+
+        参数：
+            prompt: str - 已渲染好上下文（参考资料、历史）的完整提示词
+
+        返回：
+            str - 模型返回的正文
+        """
+        payload = []
+        system = system_message()
+        if system is not None:
+            payload.append(system)
+        payload.append(HumanMessage(content=prompt))
+        response = self.chat_model.invoke(payload)
+        return response.content if hasattr(response, 'content') else str(response)
+
     def _generate_ai_response(self, question: str, history=None, owner: str = '',
                               role: str = 'auto', student: str = '') -> str:
         """
@@ -606,7 +630,8 @@ class ConsultationService:
               真实多轮消息传入，因此不渲染进文本，避免同一段上下文进两遍。
             - prompt_full：两条降级路径使用。没有消息数组可用，
               历史与参考资料都只能渲染进文本。
-            - prompt_simple：最后的兜底，保持极简，不带任何资料。
+            - prompt_simple：最后的兜底，保持极简，不带参考资料；但系统提示词仍然保留——
+              降级可以降"能力"，不能降"约束"。
 
         这与上一轮做对话记忆时的处理**正好相反**：历史有 messages 通道所以要剥离，
         参考资料没有通道所以必须留在 prompt 里。
@@ -665,8 +690,7 @@ class ConsultationService:
             chat_model_instance = self.chat_model
             if chat_model_instance:
                 logger.info("[AI响应生成] 尝试直接调用聊天模型...")
-                model_response = chat_model_instance.invoke(prompt_full)
-                content = model_response.content if hasattr(model_response, 'content') else str(model_response)
+                content = self._invoke_model(prompt_full)
                 
                 if content and content.strip():
                     logger.info(f"[AI响应生成] 直接调用模型成功，长度: {len(content)}")
@@ -685,8 +709,7 @@ class ConsultationService:
             if chat_model_instance:
                 logger.info("[AI响应生成] 尝试使用简化提示词直接调用模型...")
                 simple_prompt = f"作为初中语文老师，请回答问题：{question}"
-                model_response = chat_model_instance.invoke(simple_prompt)
-                content = model_response.content if hasattr(model_response, 'content') else str(model_response)
+                content = self._invoke_model(simple_prompt)
                 
                 if content and content.strip():
                     logger.info(f"[AI响应生成] 简化提示词调用成功，长度: {len(content)}")
@@ -749,8 +772,7 @@ class ConsultationService:
         try:
             chat_model_instance = self.chat_model
             if chat_model_instance:
-                model_response = chat_model_instance.invoke(prompt_full)
-                content = model_response.content if hasattr(model_response, 'content') else str(model_response)
+                content = self._invoke_model(prompt_full)
                 if content and content.strip():
                     logger.info(f"[AI响应生成-流式] 直接调用模型成功，长度: {len(content)}")
                     yield ('delta', content.strip())
@@ -764,8 +786,7 @@ class ConsultationService:
             chat_model_instance = self.chat_model
             if chat_model_instance:
                 simple_prompt = f"作为初中语文老师，请回答问题：{question}"
-                model_response = chat_model_instance.invoke(simple_prompt)
-                content = model_response.content if hasattr(model_response, 'content') else str(model_response)
+                content = self._invoke_model(simple_prompt)
                 if content and content.strip():
                     logger.info(f"[AI响应生成-流式] 简化提示词调用成功，长度: {len(content)}")
                     yield ('delta', content.strip())
