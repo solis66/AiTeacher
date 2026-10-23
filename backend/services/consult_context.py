@@ -134,8 +134,7 @@ def resolve(message: str, owner: str, role: str = 'auto', student: str = '') -> 
         index.sync()
         # 必须按 owner 收窄：students() 不传 owner 时返回的是**全库**学生名，
         # 只要别的账号也在同一台机器上提交过作文，"本账号有多名学生"就被误判成立，
-        # 提问者本人的学情会被当成「教师未指明学生」整块丢弃（范围解析退化为 none）。
-        # 这与 review_workbench.students(owner) 的口径保持一致。
+        # 提问者本人的学情会被整块丢弃（范围解析退化为 none）。
         known = index.students(owner)
     except Exception:
         known = []

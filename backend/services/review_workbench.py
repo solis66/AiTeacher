@@ -309,20 +309,6 @@ class ReviewWorkbench:
             return ''
         return (record.get('student') or '').strip() or (record.get('owner') or '').strip()
 
-    def students(self, owner):
-        """
-        列出该 owner 名下出现过的全部学生名（去重，按记录数从多到少）。
-
-        用途：咨询时用它把「某个学生」识别出来——名单直接从既有数据推导，
-        不需要额外维护一张学生表。
-        """
-        counts = {}
-        for record in self.list(owner):
-            name = self.student_of(record)
-            if name:
-                counts[name] = counts.get(name, 0) + 1
-        return sorted(counts, key=lambda n: (-counts[n], n))
-
     def save(self, record_id, owner, expected_version, patch):
         """
         保存人工修改。

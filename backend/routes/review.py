@@ -6,7 +6,7 @@
 接口清单：
     POST   /api/review                      创建批改任务（multipart，支持多图/多页PDF；可带 student）
     GET    /api/review/list                 当前用户的批改记录列表
-    GET    /api/review/students             当前账号名下出现过的学生名（单学生场景即本人）
+    GET    /api/review/profile              当前登录者本人的学情报告
     GET    /api/review/<rid>                批改记录详情（含分页文字与行坐标）
     GET    /api/review/<rid>/page/<name>    获取页面图片
     POST   /api/review/<rid>/save           保存人工修改（评分/评语/点评/润色/手工批注）
@@ -169,33 +169,17 @@ def create_batch():
         return jsonify({'success': False, 'message': f'创建批量批改任务失败：{exc}'}), 500
 
 
-@review_bp.route('/api/review/students', methods=['GET'])
-def list_students():
-    """
-    列出当前账号名下出现过的学生名。
-
-    名单直接从既有批改记录推导，不额外维护学生表；单学生账号返回本人。
-    """
-    try:
-        return jsonify({'success': True, 'data': workbench.students(current_owner())})
-    except Exception as exc:
-        logger.error('查询学生名单失败: %s', exc, exc_info=True)
-        return jsonify({'success': False, 'message': '查询学生名单失败'}), 500
-
-
 @review_bp.route('/api/review/profile', methods=['GET'])
 def review_profile():
-    """学情报告（需求用户界面：登录后查学情）。
+    """学情报告：固定返回当前登录者本人的学情。
 
-    ?student= 可指定学生；缺省取 owner（提交者本人）。
-    数据由索引直接计算（不走模型/向量），按 owner 隔离。
+    账号体系统一为学生后，普通用户只能查看自己的学情，因此这里完全忽略
+    任何 ?student= 参数，并以 owner 作为学生归属与隔离条件双重限定。
+    管理员查看他人学情属于管理能力，走 /api/admin/users/<account>/profile。
     """
     try:
         owner = current_owner()
-        student = (request.args.get('student') or '').strip()
-        if not student or student == owner:
-            student = owner
-        profile = get_index().student_profile(student, owner if student != owner else None)
+        profile = get_index().student_profile(owner, owner)
         return jsonify({'success': True, 'data': profile})
     except Exception as exc:
         logger.error('查询学情报告失败: %s', exc, exc_info=True)

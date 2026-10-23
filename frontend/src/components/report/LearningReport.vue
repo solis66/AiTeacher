@@ -5,15 +5,6 @@
       <p class="page-sub">基于已完成批改结果计算的确定性数据，展示学业情况与趋势</p>
     </header>
 
-    <div v-if="students.length > 1" class="student-switch">
-      <label class="field inline">
-        <span class="field-label">查看学生</span>
-        <select v-model="student" class="ui-input" @change="loadProfile">
-          <option v-for="s in students" :key="s" :value="s">{{ s }}</option>
-        </select>
-      </label>
-    </div>
-
     <div v-if="!loaded" class="report-empty">
       <Loader2 v-if="loading" :size="22" class="spin" />
       <p>{{ loading ? '正在生成学情报告…' : '暂无批改数据，请先完成批改' }}</p>
@@ -84,7 +75,10 @@
 <script setup>
 /**
  * 学情报告（需求用户界面：登录后查学情）
+ *
  * 数据全部由后端直接计算（平均分/最高/最低/最近/趋势/维度得分率），不含模拟数据。
+ * 账号体系统一为学生后，本页只展示登录者本人的学情；管理员查看他人学情
+ * 走「用户管理」页面，因此这里不再提供学生切换下拉框。
  */
 import { ref, computed, onMounted } from 'vue';
 import { Loader2 } from 'lucide-vue-next';
@@ -92,8 +86,6 @@ import request from '../../api/request.js';
 
 const props = defineProps({ username: { type: String, default: '' } });
 
-const students = ref([]);
-const student = ref('');
 const profile = ref(null);
 const loading = ref(false);
 const loaded = ref(false);
@@ -129,18 +121,11 @@ const trendLabel = computed(() => {
   return t?.direction === '上升' ? '成绩有所上升' : t?.direction === '下降' ? '成绩有所下滑' : '保持平稳';
 });
 
-const loadStudents = async () => {
-  try {
-    const res = await request.get('/api/review/students', { headers: ownerHeader() });
-    if (res.data.success) students.value = res.data.data || [];
-  } catch (e) { /* 名单加载失败不阻塞 */ }
-};
-
 const loadProfile = async () => {
   loading.value = true;
   try {
-    const params = student.value && student.value !== props.username ? { student: student.value } : {};
-    const res = await request.get('/api/review/profile', { headers: ownerHeader(), params });
+    // 后端按 X-Username（owner）固定返回本人学情，不接受指定他人
+    const res = await request.get('/api/review/profile', { headers: ownerHeader() });
     if (res.data.success) {
       profile.value = res.data.data;
       loaded.value = res.data.data?.has_data ?? false;
@@ -154,11 +139,7 @@ const loadProfile = async () => {
   }
 };
 
-onMounted(async () => {
-  await loadStudents();
-  if (students.value.length > 1) student.value = students.value[0];
-  await loadProfile();
-});
+onMounted(loadProfile);
 </script>
 
 <style scoped>
@@ -166,10 +147,6 @@ onMounted(async () => {
 .page-head { margin-bottom: 16px; }
 .page-title { font-size: var(--fs-xl); font-weight: 700; margin-bottom: 4px; }
 .page-sub { font-size: var(--fs-sm); color: var(--c-text-secondary); margin: 0; }
-.student-switch { margin-bottom: 16px; }
-.field.inline { flex-direction: row; align-items: center; gap: 10px; }
-.field-label { font-size: var(--fs-xs); color: var(--c-text-secondary); }
-
 .report-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 60px; color: var(--c-text-muted); }
 
 .stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
