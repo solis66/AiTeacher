@@ -93,4 +93,6 @@ def load_agent_config(config_path: str = get_abs_path('config/agent.yaml'), enco
 rag_conf = load_rag_config()
 chroma_conf = load_chroma_config()
 prompts_conf = load_prompts_config()
-agent_conf = load_agent_config()
+# agent.yaml 允许为空（护栏全用代码默认值），此时 load_agent_config 返回 None，
+# 统一收敛成空字典，避免调用方 .get() 报 AttributeError
+agent_conf = load_agent_config() or {}

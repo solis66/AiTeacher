@@ -25,6 +25,7 @@ from typing import Dict, List, Optional
 
 from utils.config_handler import chroma_conf
 from utils.path_tool import get_abs_path
+from utils.retrieval_timeout import run_with_timeout
 
 _CONSULT = chroma_conf.get('consult') or {}
 
@@ -38,6 +39,9 @@ DEFAULT_K = int(_CONSULT.get('k_knowledge', 4))
 # 此前这里写 0.35、review_index 写 0.20：配置项缺失时两个模块会各自按不同阈值过滤，
 # 同一句问句在"教研资料"和"批改案例"上的召回标准悄悄分叉，且没有任何报错提示。
 DEFAULT_THRESHOLD = float(_CONSULT.get('score_threshold', 0.20))
+# 单次检索超时（秒）。与 config/chroma.yaml 的 consult.timeout 对齐；
+# 之前这个配置项没人读，检索卡住时请求会一直挂着。
+RETRIEVAL_TIMEOUT = float(_CONSULT.get('timeout', 8))
 STATE_FILE = get_abs_path(_CONSULT.get('knowledge_md5_store', 'md5_knowledge.text'))
 
 # 建库串行化锁。Flask 多线程下两个并发咨询会同时触发建库/更新，
@@ -291,7 +295,11 @@ def search(query: str, k: int = None, threshold: float = None) -> List:
     if store is None or not (query or '').strip():
         return []
     try:
-        raw = store.similarity_search_with_relevance_scores(query, k=k or DEFAULT_K)
+        raw = run_with_timeout(
+            lambda: store.similarity_search_with_relevance_scores(query, k=k or DEFAULT_K),
+            RETRIEVAL_TIMEOUT,
+            default=[],
+        )
     except Exception:
         return []
     limit = DEFAULT_THRESHOLD if threshold is None else threshold

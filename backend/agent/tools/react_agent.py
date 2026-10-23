@@ -15,10 +15,20 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from model.factory import chat_model, get_chat_model, is_model_initialized
 from utils.prompt_loader import load_system_prompts
 from agent.tools.agent_tools import search_knowledge
-from agent.tools.middleware import monitor_tool, log_before_model
+from agent.tools.middleware import monitor_tool, log_before_model, limit_tools_after_budget
 from utils.error_handler import ServiceUnavailableError
+from langgraph.errors import GraphRecursionError
+from utils.config_handler import agent_conf
 import traceback
 import time
+
+# 单次问答的图步数上限。langgraph 的 recursion_limit 是顶层配置项，
+# 通过 config 传给 stream/invoke；不设的话默认 25 步。
+# 默认值与 config/agent.yaml 一致：每个模型/工具/中间件节点都算一步，
+# 「检索两次 + 作答」的正常流程约 8 步，20 步作为硬兜底。
+AGENT_RUN_CONFIG = {
+    'recursion_limit': max(4, int((agent_conf or {}).get('agent_recursion_limit', 20)))
+}
 
 
 class ReactAgent:
@@ -103,7 +113,9 @@ class ReactAgent:
                 model=chat_model,
                 system_prompt=load_system_prompts(),
                 tools=[search_knowledge],
-                middleware=[monitor_tool, log_before_model],
+                # limit_tools_after_budget：工具预算用完后摘掉工具定义，
+                # 确保模型收尾作答——否则它会反复检索，把图步数耗到 recursion_limit。
+                middleware=[monitor_tool, limit_tools_after_budget, log_before_model],
             )
             self._initialized = True
             print("[ReactAgent] Agent初始化成功")
@@ -347,13 +359,13 @@ class ReactAgent:
             # 尝试获取流式响应
             stream_iterator = None
             try:
-                stream_iterator = self._agent.stream(input_dict, stream_mode="messages")
+                stream_iterator = self._agent.stream(input_dict, config=AGENT_RUN_CONFIG, stream_mode="messages")
                 print("[ReactAgent] 成功获取流式迭代器")
             except Exception as e:
                 print(f"[ReactAgent] 获取流式迭代器失败: {str(e)}")
                 # 尝试不使用stream_mode参数
                 try:
-                    stream_iterator = self._agent.stream(input_dict)
+                    stream_iterator = self._agent.stream(input_dict, config=AGENT_RUN_CONFIG)
                     print("[ReactAgent] 尝试不使用stream_mode参数成功")
                 except Exception as e2:
                     print(f"[ReactAgent] 再次尝试获取流式迭代器失败: {str(e2)}")
@@ -431,7 +443,7 @@ class ReactAgent:
                 # 尝试使用非流式方式作为备用
                 try:
                     print("[ReactAgent] 尝试非流式执行作为备用")
-                    response = self._agent.invoke(input_dict)
+                    response = self._agent.invoke(input_dict, config=AGENT_RUN_CONFIG)
                     if response:
                         # invoke 返回的是最终状态：{"messages": [SystemMessage, ..., AIMessage]}
                         # 最终回答在最后一条 AIMessage 里
@@ -481,6 +493,12 @@ class ReactAgent:
             # 超时错误
             print(f"[ReactAgent] 请求超时: {str(e)}")
             yield "抱歉，请求超时，请稍后重试。"
+        except GraphRecursionError:
+            # 超过 recursion_limit：模型在「模型→工具→模型」里停不下来。
+            # 已经产出的正文保留（用户至少能看到部分回答），没有正文才给提示。
+            print(f"[ReactAgent] 超过图步数上限 {AGENT_RUN_CONFIG['recursion_limit']}，中止本轮")
+            if not total_content.strip():
+                yield "抱歉，这个问题需要过多轮的资料检索，已停止继续查找。可以把问题描述得更具体一些，或换个问法。"
         except RuntimeError as e:
             # 底层执行器已被关闭（服务热重载/进程回收期间，create_agent 返回的图内部
             # ThreadPoolExecutor 被关闭），复用旧 agent 会抛 "cannot schedule new

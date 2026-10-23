@@ -39,6 +39,7 @@ from typing import Dict, List, Optional, Tuple
 
 from utils.config_handler import chroma_conf
 from utils.path_tool import get_abs_path
+from utils.retrieval_timeout import run_with_timeout
 
 _CONSULT = chroma_conf.get('consult') or {}
 
@@ -47,6 +48,8 @@ STATE_FILE = get_abs_path(_CONSULT.get('index_state', 'review_index_state.json')
 DEFAULT_K = int(_CONSULT.get('k_cases', 6))
 # 兜底阈值与 config/chroma.yaml 的 consult.score_threshold 保持一致（0.20 为实测标定值）
 DEFAULT_THRESHOLD = float(_CONSULT.get('score_threshold', 0.20))
+# 单次检索超时（秒），与 config/chroma.yaml 的 consult.timeout 对齐
+RETRIEVAL_TIMEOUT = float(_CONSULT.get('timeout', 8))
 MAX_REVIEWS = int(_CONSULT.get('case_max_reviews', 500))
 
 
@@ -587,7 +590,12 @@ class ReviewIndex:
         where = clauses[0] if len(clauses) == 1 else {'$and': clauses}
 
         try:
-            raw = store.similarity_search_with_relevance_scores(query, k=k or DEFAULT_K, filter=where)
+            raw = run_with_timeout(
+                lambda: store.similarity_search_with_relevance_scores(
+                    query, k=k or DEFAULT_K, filter=where),
+                RETRIEVAL_TIMEOUT,
+                default=[],
+            )
         except Exception:
             return []
 
