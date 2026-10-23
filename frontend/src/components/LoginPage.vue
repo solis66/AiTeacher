@@ -33,24 +33,7 @@
           <span v-if="errors.username" class="error-text">{{ errors.username }}</span>
         </div>
 
-        <!-- 账号类型（仅注册时显示）：决定登录后可用的功能范围 -->
-        <div v-if="mode === 'register'" class="form-group">
-          <label class="form-label">账号类型</label>
-          <div class="role-picker">
-            <button
-              v-for="opt in roleOptions"
-              :key="opt.value"
-              type="button"
-              class="role-option"
-              :class="{ 'is-active': form.role === opt.value }"
-              @click="form.role = opt.value"
-            >
-              <component :is="opt.icon" :size="18" />
-              <span class="role-name">{{ opt.label }}</span>
-              <span class="role-desc">{{ opt.desc }}</span>
-            </button>
-          </div>
-        </div>
+        <!-- 账号类型：平台仅面向学生，注册不再提供角色选择 -->
 
         <!-- 密码输入框（支持显示/隐藏切换） -->
         <div class="form-group">
@@ -136,7 +119,7 @@
 
         <!-- 测试账号提示（仅登录时显示） -->
         <div v-if="mode === 'login'" class="hint-box">
-          <p class="hint-text">管理测试账号（老师）</p>
+          <p class="hint-text">管理员账号</p>
           <p class="hint-detail">账号：admin</p>
           <p class="hint-detail">密码：123456</p>
         </div>
@@ -165,7 +148,7 @@
 import { ref, computed, reactive } from 'vue';
 import {
   GraduationCap, User, Lock, Eye, EyeOff,
-  Loader2, AlertCircle, CheckCircle2, Users
+  Loader2, AlertCircle, CheckCircle2
 } from 'lucide-vue-next';
 import request from '../api/request.js';
 import { setToken, setUser, setRole } from '../utils/auth.js';
@@ -188,19 +171,8 @@ const successMessage = ref('');
 const form = reactive({
   username: '',
   password: '',
-  confirmPassword: '',
-  role: 'student'
+  confirmPassword: ''
 });
-
-/**
- * 账号类型选项。
- * 用普通常量数组而非 reactive：选项里存的是组件对象，
- * 被响应式代理包住会让 Vue 报「组件被做成响应式」的警告。
- */
-const roleOptions = [
-  { value: 'student', label: '学生', desc: '加入班级、提交作文训练', icon: GraduationCap },
-  { value: 'teacher', label: '老师', desc: '创建班级、发布作文、查看学情', icon: Users }
-];
 
 /**
  * 状态管理变量
@@ -300,20 +272,17 @@ const togglePasswordVisibility = () => {
  * 提交注册请求
  * 校验通过后调用 POST /register，成功后切回登录模式并预填手机号
  */
-/** 把角色值转成中文名，用于提示文案 */
-const roleLabelOf = (value) => (roleOptions.find((o) => o.value === value)?.label || '');
-
 const handleRegister = async () => {
+  // 平台仅面向学生，注册固定为学生账号（管理员由服务端维护）
   const response = await request.post('/register', {
     account: form.username.trim(),
     password: form.password.trim(),
-    confirm_password: form.confirmPassword.trim(),
-    role: form.role
+    confirm_password: form.confirmPassword.trim()
   });
 
   if (response.data.success) {
     // 注册成功回登录页，携带提示并预填账号
-    successMessage.value = `注册成功（${roleLabelOf(form.role) || '学生'}账号），请登录`;
+    successMessage.value = '注册成功（学生账号），请登录';
     mode.value = 'login';
     form.password = '';
     form.confirmPassword = '';
@@ -369,7 +338,7 @@ const handleSubmit = async () => {
       // 保存JWT令牌与用户名到本地存储，用于后续API请求认证与数据归属
       setToken(response.data.token);
       setUser(response.data.username);
-      // 账号类型：决定主界面显示老师端还是学生端入口（权限判定仍在服务端）
+      // 账号类型：管理员额外显示「用户管理」入口（权限判定仍在服务端）
       setRole(response.data.role || '');
 
       // 触发登录成功事件，通知父组件跳转主页面
@@ -542,55 +511,6 @@ const handleSubmit = async () => {
 .error-text {
   font-size: var(--fs-xs);
   color: var(--c-error);
-}
-
-/* 账号类型选择：两个并排卡片，选中态用主色描边 + 浅底 */
-.role-picker {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.role-option {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 10px 12px;
-  font-family: inherit;
-  text-align: left;
-  color: var(--c-text-secondary);
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-strong);
-  border-radius: var(--r-md);
-  cursor: pointer;
-  transition: border-color .15s, background-color .15s, color .15s;
-}
-
-.role-option:hover {
-  border-color: var(--c-primary);
-}
-
-.role-option.is-active {
-  color: var(--c-primary);
-  background: var(--c-primary-soft);
-  border-color: var(--c-primary);
-}
-
-.role-name {
-  font-size: var(--fs-sm);
-  font-weight: 600;
-}
-
-.role-desc {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--c-text-muted);
-}
-
-.role-option.is-active .role-desc {
-  color: var(--c-primary);
-  opacity: .8;
 }
 
 .alert {

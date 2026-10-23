@@ -14,7 +14,7 @@
 
       <div class="message-content-wrapper">
         <div class="message-header">
-          <span class="message-role">{{ msg.role === 'user' ? '我' : 'AI咨询老师' }}</span>
+          <span class="message-role">{{ msg.role === 'user' ? '我' : 'AI老师' }}</span>
           <span class="message-time">{{ formatTime(msg.timestamp) }}</span>
         </div>
 
@@ -112,7 +112,7 @@
     <!-- 空状态 -->
     <div v-if="messages.length === 0" class="empty-state">
       <div class="empty-icon"><FileText :size="40" /></div>
-      <div class="empty-title">开始你的作文批改之旅</div>
+      <div class="empty-title">开始你的作文登神之路</div>
       <div class="empty-desc">
         输入有关于作文的任何问题，或上传作文材料，AI老师将为你提供专业的建议与指导。
       </div>

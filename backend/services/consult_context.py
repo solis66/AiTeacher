@@ -6,7 +6,7 @@
 
 本模块解决的核心问题是**范围解析**：同一条提问，落在谁身上？
     - 学生问「我开头总是写不好」        → 范围 = 提问者本人
-    - 老师问「李明的学情怎么样」        → 范围 = 李明（且只在本账号的记录内）
+    - 账号下出现多名学生且未指明        → 不注入个人学情（无法确定具体人）
     - 学生问「议论文论据怎么用」        → 不涉及具体人，只给教研资料
 范围搞错会让建议张冠李戴（把 A 的问题说成 B 的），因此宁可判为"不注入"，
 也不要在没把握时猜一个人出来。
@@ -14,8 +14,8 @@
 身份来源说明（沿用项目既有约定）：
     项目通过 X-Username 请求头做数据隔离，该值由前端填写，不是身份认证手段。
     因此本模块的"角色"不是安全边界，而是**提示级别的意图声明**：
-    role='student' / 'auto' 时才允许把"我"解析为学生本人；role='teacher' 时
-    必须显式指明学生。真正的数据隔离仍由 `owner` 字段在检索过滤条件里保证。
+    role='student' / 'auto' 时才允许把"我"解析为学生本人；其他取值一律视为
+    无法确定具体人。真正的数据隔离仍由 `owner` 字段在检索过滤条件里保证。
 """
 
 import json
@@ -72,20 +72,20 @@ def resolve_scope(message: str, owner: str, role: str = 'auto',
     参数：
         message:        用户提问
         owner:          当前账号（数据隔离键）
-        role:           'student' / 'teacher' / 'auto'（默认 auto，按数据自动判断）
-        student_hint:   前端显式指定的学生名（老师端选择学生时使用）
+        role:           'student' / 'auto'（默认 auto，按数据自动判断）
+        student_hint:   前端显式指定的学生名
         known_students: 当前账号名下出现过的学生名
 
     返回：
         {'scope': 'self'|'student'|'none', 'student': str,
          'owner_scoped': bool, 'reason': str}
-        owner_scoped=True 表示检索时还要按 owner 过滤（老师查自己名下的学生）。
+        owner_scoped=True 表示检索时还要按 owner 过滤（显式指定了非本人学生）。
     """
     msg = (message or '').strip()
     owner = (owner or '').strip()
     known = [n for n in (known_students or []) if n and n.strip()]
 
-    # 1) 显式指定学生（老师端下拉选择）
+    # 1) 显式指定学生（前端下拉选择）
     hint = (student_hint or '').strip()
     if hint:
         if hint == owner:
@@ -100,15 +100,15 @@ def resolve_scope(message: str, owner: str, role: str = 'auto',
             return {'scope': 'self', 'student': owner, 'owner_scoped': False, 'reason': '提问中出现本人姓名'}
         return {'scope': 'student', 'student': name, 'owner_scoped': True, 'reason': '提问中出现学生姓名'}
 
-    # 3) 教师身份但没指明学生 → 不注入个人学情，避免猜错人
-    if role == 'teacher':
-        return {'scope': 'none', 'student': '', 'owner_scoped': False, 'reason': '教师身份但未指明学生'}
+    # 3) 角色不是学生/自动 → 不注入个人学情，避免猜错人
+    if role not in ('student', 'auto'):
+        return {'scope': 'none', 'student': '', 'owner_scoped': False, 'reason': '角色未知，未指明学生'}
 
-    # 4) 账号下有多名学生 ⇒ 该账号更像教师账号，此时"我"不能当作某个学生
-    #    （数据依据：一个学生账号下只会有一个学生名）
+    # 4) 账号下有多名学生 ⇒ 无法确定"我"具体是谁
+    #    （单学生账号下只会有一个学生名）
     if role == 'auto' and len(set(known)) > 1:
         return {'scope': 'none', 'student': '', 'owner_scoped': False,
-                'reason': '账号下有多名学生（疑似教师），未指明学生'}
+                'reason': '账号下有多名学生，未指明学生'}
 
     # 5) 学生自指，或提问本身是作文话题 → 注入本人学情做个性化
     if any(w in msg for w in SELF_WORDS) or any(w in msg for w in STUDY_WORDS):

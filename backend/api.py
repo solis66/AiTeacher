@@ -58,8 +58,8 @@ from utils.request_helpers import (
 )
 # 批改工作台路由（上传/分页识别/AI批改/保存/导出）
 from routes.review import review_bp
-# 班级与作业路由（老师建班/发作业、学生加班/提交、班级提交与学情）
-from routes.classroom import classroom_bp
+# 管理员路由（用户管理：在线状态/批改记录/学情报告）
+from routes.admin import admin_bp
 import traceback
 import re
 import os
@@ -78,8 +78,8 @@ app.config['SECRET_KEY'] = 'ai_teacher_secret_key_2026_must_be_at_least_32_bytes
 # 注册批改工作台蓝图（提供 /api/review* 系列接口）
 app.register_blueprint(review_bp)
 
-# 注册班级与作业蓝图（/api/class*、/api/assignment*）
-app.register_blueprint(classroom_bp)
+# 注册管理员蓝图（/api/admin* 用户管理接口）
+app.register_blueprint(admin_bp)
 
 # 咨询检索的索引预热：把已有的批改记录同步进向量库（后台线程，不阻塞启动）。
 # 不做成"启动时同步建库并等待"——作文很多时首次建索引要调用 embedding 接口，
@@ -168,30 +168,6 @@ except Exception as e:
     if not _cfg['password']:
         print("    ↳ 密码为空：容器没读到 .env，检查仓库根目录下 .env 是否存在（不是 backend/.env）")
     logger.warning("用户表初始化失败: %s | 根因: %s: %s", e, type(_root).__name__, _root)
-
-# 班级 / 作业相关表（幂等）。失败只告警、不阻塞启动：受影响的是班级功能，
-# 原有的批改、咨询等核心能力不受牵连。
-try:
-    from services import classroom_service as _classroom_service
-    _classroom_service.init_tables()
-except Exception as e:
-    print(f"⚠️  班级相关表初始化失败（班级与作业功能将不可用）：{e}")
-
-# 账号改名后同步迁移批改记录的归属（幂等，可以每次启动都跑）。
-# 批改记录一律以 owner 作为隔离键查询（WHERE owner=?），账号改名后原记录不会报错，
-# 只是再也查不出来 —— 界面上表现为历史批改成果「集体消失」，极易被误判成数据丢失。
-try:
-    from routes.review import workbench as _review_workbench
-    _moved = _review_workbench.store.migrate_owner(
-        user_service.LEGACY_TEST_ACCOUNT, user_service.TEST_ACCOUNT
-    )
-    if _moved:
-        print(f"✅ 已把 {_moved} 条历史批改记录从 {user_service.LEGACY_TEST_ACCOUNT} "
-              f"迁移到 {user_service.TEST_ACCOUNT}")
-        logger.info("批改记录归属迁移完成: %d 条", _moved)
-except Exception as e:
-    print(f"⚠️  批改记录归属迁移失败（不影响启动）：{e}")
-
 
 def log_api_request(func):
     """
@@ -303,6 +279,22 @@ def token_required(f):
         return f(current_user, *args, **kwargs)
     
     return decorated
+
+
+@app.route('/api/presence/ping', methods=['POST'])
+@token_required
+def presence_ping(current_user):
+    """
+    在线心跳接口
+    刷新当前用户的最后活跃时间，管理员据此判断在线/离线（180 秒窗口）
+
+    返回: {"success": true}
+    """
+    try:
+        user_service.touch_activity(current_user)
+    except user_service.DatabaseUnavailableError:
+        return json_error('数据库不可用', '数据库连接失败，请稍后重试', status=503)
+    return jsonify({'success': True})
 
 
 def load_essay_criteria():
@@ -1297,11 +1289,11 @@ def chat():
         # 保证刷新页面或更换设备后 AI 仍能续接前文
         history = normalize_history(latest_session_messages(get_request_username()))
 
-    # 咨询检索范围：role 决定"我"能否解析为学生本人，student 用于老师端显式指定学生。
-    # 两者都只是**意图声明**，不是安全边界——真正的数据隔离由 owner（X-Username）
-    # 在检索过滤条件里保证。取值非法时退回默认，不因参数问题让咨询失败。
+    # 咨询检索范围：role 决定"我"能否解析为学生本人。
+    # 这里只是**意图声明**，不是安全边界——真正的数据隔离由 owner（X-Username）
+    # 在检索过滤条件里保证。新账号体系只有学生，非 student/auto 一律按 auto 处理。
     role = (data.get('role') or 'auto').strip().lower()
-    if role not in ('student', 'teacher', 'auto'):
+    if role not in ('student', 'auto'):
         role = 'auto'
     student_hint = (data.get('student') or '').strip()[:40]
 
@@ -1467,10 +1459,10 @@ def chat():
 def register():
     """
     用户注册接口
-    校验手机号/密码/确认密码，写入 PostgreSQL 用户表，返回注册结果
+    校验账号/密码/确认密码，写入 PostgreSQL 用户表，返回注册结果
     （注册成功后由前端引导回到登录页登录）
 
-    请求体: {"account": "账号", "password": "xxx", "confirm_password": "xxx", "role": "teacher|student"}
+    请求体: {"account": "账号", "password": "xxx", "confirm_password": "xxx"}
     返回: {"success": true, "message": "注册成功，请登录", "account": "账号", "role": "student"}
     """
     data = get_json_body()
@@ -1483,7 +1475,9 @@ def register():
     account = (data.get('account') or data.get('username') or '').strip()
     password = data.get('password') or ''
     confirm = data.get('confirm_password') or data.get('confirmPassword') or ''
-    role = (data.get('role') or user_service.DEFAULT_ROLE).strip().lower()
+    # 新账号体系只允许注册学生；显式传入其它角色（teacher/admin）直接拒绝
+    requested_role = (data.get('role') or '').strip().lower()
+    role = user_service.DEFAULT_ROLE
 
     # 校验账号：5~20 位字母/数字/下划线（由原先的 11 位手机号放宽）
     if not re.fullmatch(user_service.ACCOUNT_PATTERN, account):
@@ -1493,9 +1487,9 @@ def register():
             '仅支持字母、数字与下划线，且须以字母或数字开头',
         )
 
-    # 校验账号类型：只允许老师 / 学生
-    if role not in user_service.VALID_ROLES:
-        return json_error('账号类型错误', '账号类型只能是老师或学生')
+    # 校验账号类型：只允许注册学生账号
+    if requested_role and requested_role != user_service.DEFAULT_ROLE:
+        return json_error('账号类型错误', '仅支持注册学生账号')
 
     # 校验密码：长度 ≥ 6，且仅允许可见 ASCII 字符（字母/数字/特殊符号，无空格/中文/控制符）
     if not password or len(password) < 6:
@@ -1509,6 +1503,8 @@ def register():
 
     try:
         user_service.create_user(account, password, role)
+    except ValueError as e:
+        return json_error('账号类型错误', str(e))
     except user_service.DuplicateAccountError:
         return json_error('账号已注册', '该账号已注册，请直接登录')
     except user_service.DatabaseUnavailableError:
@@ -1526,7 +1522,7 @@ def login():
 
     请求体: {"username": "admin", "password": "123456"}
     返回: {"success": true, "token": "xxx", "username": "admin",
-           "role": "teacher", "role_label": "老师"}
+           "role": "admin", "role_label": "管理员"}
     """
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -1541,7 +1537,13 @@ def login():
     try:
         user = user_service.get_user_by_account(username)
         if user and user_service.verify_password(user, password):
-            # 角色写进 token 一并下发：前端据此决定显示老师端还是学生端界面。
+            # 记录登录时间与最后活跃时间（管理员用户管理据此判断在线状态）
+            try:
+                user_service.record_login(user['account'])
+            except Exception as exc:
+                logger.warning("[登录] 记录登录时间失败: %s", exc)
+
+            # 角色写进 token 一并下发：前端据此决定显示管理员还是学生界面。
             # 注意这只是「界面分流」依据，真正的权限判定一律在服务端按 users.role 复核。
             role = user.get('role') or user_service.DEFAULT_ROLE
             token = jwt.encode({

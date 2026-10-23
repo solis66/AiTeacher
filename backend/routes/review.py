@@ -6,7 +6,7 @@
 接口清单：
     POST   /api/review                      创建批改任务（multipart，支持多图/多页PDF；可带 student）
     GET    /api/review/list                 当前用户的批改记录列表
-    GET    /api/review/students             当前账号名下出现过的学生名（供老师选择）
+    GET    /api/review/students             当前账号名下出现过的学生名（单学生场景即本人）
     GET    /api/review/<rid>                批改记录详情（含分页文字与行坐标）
     GET    /api/review/<rid>/page/<name>    获取页面图片
     POST   /api/review/<rid>/save           保存人工修改（评分/评语/点评/润色/手工批注）
@@ -17,7 +17,7 @@
 数据隔离：所有接口都以 X-Username 作为归属键，只能访问自己的记录，
          因此“分享/导出”不会暴露其他作文记录。
 学生归属：owner = 提交者（隔离键）；student = 作文所属学生（学情检索键）。
-         学生自己提交时 student 缺省为 owner，老师代提交时显式填写。
+         单学生账号下 student 缺省即为 owner。
 """
 
 import logging
@@ -101,23 +101,8 @@ def create_review():
         title = request.form.get('title') or ''
         requirements = request.form.get('requirements') or ''
         body = request.form.get('body') or ''
-        # 学生归属：老师代学生提交时填写；学生自己提交时留空，由后端取 owner
+        # 学生归属：单学生账号下留空即可，由后端取 owner
         student = request.form.get('student') or ''
-
-        # 作业提交：学生从「我的班级」提交时带上 assignment_id，老师的
-        # 「班级提交 / 班级学情」按它聚合。留空即为普通批改，行为完全不变。
-        assignment_id = (request.form.get('assignment_id') or '').strip() or None
-        if assignment_id:
-            from services.classroom_service import ClassroomError, get_assignment_for_student
-            try:
-                # 必须校验「该学生确实在这个班里」：否则任何人随手填一个作业 id
-                # 就能把作文挂进别人的班级，老师的班级视图会被污染。
-                get_assignment_for_student(assignment_id, owner)
-            except ClassroomError as exc:
-                return jsonify({'success': False, 'message': str(exc)}), 400
-            # 作业提交强制以提交者账号作为学生归属，保证班级统计口径一致
-            # （学生端本来就不提供「学生归属」输入框，这里再兜一层）。
-            student = owner
 
         # 按前端排列顺序收集附件（同名多文件时顺序即为用户排序结果）
         uploads = []
@@ -126,7 +111,7 @@ def create_review():
                 uploads.append((storage.filename, storage.read()))
 
         record = workbench.create(owner, grade, essay_type, title, requirements, body, uploads,
-                                  student, assignment_id)
+                                  student)
         return jsonify({'success': True, 'data': summarize(record)})
     except ValueError as exc:
         # 校验类错误（含“请重新输入jpg格式的图片”）原样返回给用户
@@ -187,9 +172,9 @@ def create_batch():
 @review_bp.route('/api/review/students', methods=['GET'])
 def list_students():
     """
-    列出当前账号名下出现过的学生名（供老师选择/前端提示）。
+    列出当前账号名下出现过的学生名。
 
-    名单直接从既有批改记录推导，不额外维护学生表。
+    名单直接从既有批改记录推导，不额外维护学生表；单学生账号返回本人。
     """
     try:
         return jsonify({'success': True, 'data': workbench.students(current_owner())})
@@ -202,7 +187,7 @@ def list_students():
 def review_profile():
     """学情报告（需求用户界面：登录后查学情）。
 
-    ?student= 指定学生（老师代查）；缺省取 owner（提交者本人）。
+    ?student= 可指定学生；缺省取 owner（提交者本人）。
     数据由索引直接计算（不走模型/向量），按 owner 隔离。
     """
     try:

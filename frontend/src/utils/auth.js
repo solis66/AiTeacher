@@ -8,10 +8,11 @@
  *   此前各组件散落着 'ai_teacher_token' / 'ai_teacher_user' 魔法字符串，
  *   统一收敛到本模块，避免键名不一致导致身份丢失。
  *
- * 账号类型（2026-09 新增）：
- *   role 为 'teacher' 或 'student'，登录时由后端一并返回并写入 token。
- *   前端只用它做界面分流（显示老师端还是学生端入口），
- *   真正的权限判定一律在服务端按 users.role 复核，改这里不会越权。
+ * 账号类型（2026-10 调整）：
+ *   role 只有 'admin'（管理员）与 'student'（学生）；
+ *   普通用户一律为 student，管理员额外拥有「用户管理」入口。
+ *   前端只用它做界面分流，真正的权限判定一律在服务端按 users.role 复核，
+ *   改这里不会越权。
  */
 
 /** localStorage 键名（全项目唯一定义处） */
@@ -20,7 +21,7 @@ export const USER_KEY = 'ai_teacher_user';
 export const ROLE_KEY = 'ai_teacher_role';
 
 /** 账号类型显示名 */
-export const ROLE_LABELS = { teacher: '老师', student: '学生' };
+export const ROLE_LABELS = { admin: '管理员', student: '学生' };
 
 /** 读取 JWT 令牌 */
 export function getToken() {
@@ -42,7 +43,7 @@ export function setUser(username) {
   localStorage.setItem(USER_KEY, username);
 }
 
-/** 保存当前账号类型（teacher / student） */
+/** 保存当前账号类型（admin / student） */
 export function setRole(role) {
   localStorage.setItem(ROLE_KEY, role || '');
 }
@@ -78,14 +79,14 @@ export function getRole() {
   return parseJwt(getToken()).role || '';
 }
 
-/** 读取账号类型的显示名（如「老师」），未知时返回空串 */
+/** 读取账号类型的显示名（如「管理员」），未知时返回空串 */
 export function getRoleLabel() {
   return ROLE_LABELS[getRole()] || '';
 }
 
-/** 是否为老师账号 */
-export function isTeacher() {
-  return getRole() === 'teacher';
+/** 是否为管理员账号 */
+export function isAdmin() {
+  return getRole() === 'admin';
 }
 
 /** 清除登录态（退出登录 / 令牌失效时调用） */

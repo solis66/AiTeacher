@@ -1,7 +1,7 @@
 <template>
   <section class="submit-page">
     <header class="page-head">
-      <h2 class="page-title">开始批改</h2>
+      <h2 class="page-title">作文批改</h2>
       <p class="page-sub">提交作文正文或上传图片/PDF，AI 依据题目要求进行批改</p>
     </header>
 
@@ -45,10 +45,6 @@
               <option value="">由AI依题干判定</option>
               <option v-for="t in essayTypes" :key="t" :value="t">{{ t }}</option>
             </select>
-          </label>
-          <label class="field">
-            <span class="field-label">学生归属（可选）</span>
-            <input v-model="essay.student" class="ui-input" placeholder="留空=提交者本人" />
           </label>
         </div>
 
@@ -161,7 +157,7 @@
       >
         <Loader2 v-if="submitting" :size="14" class="spin" />
         <Sparkles v-else :size="14" />
-        <span>{{ submitting ? '提交批改中…' : '开始批改' }}</span>
+        <span>{{ submitting ? '提交批改中…' : '作文批改' }}</span>
       </button>
     </footer>
   </section>
@@ -169,7 +165,7 @@
 
 <script setup>
 /**
- * 开始批改（需求 4.1）
+ * 作文批改（需求 4.1）
  * - 单次批改：1 篇，图片/PDF 最多 3 张
  * - 批量批改：最多 2 篇、单次最多 6 张（每篇 ≤3），后端拆成多条独立记录聚合
  */
@@ -198,7 +194,7 @@ const ocrBusy = reactive({});
 
 const essayTemplate = () => ({
   key: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-  grade: '', essayType: '', student: '', title: '', requirements: '', body: '', files: []
+  grade: '', essayType: '', title: '', requirements: '', body: '', files: []
 });
 const essays = reactive([essayTemplate()]);
 
@@ -288,7 +284,6 @@ const submit = async () => {
       fd.append('title', e.title);
       fd.append('requirements', e.requirements);
       fd.append('body', e.body);
-      fd.append('student', e.student);
       e.files.forEach((file) => fd.append('files', file, file.name));
       const res = await request.post('/api/review', fd, { headers: ownerHeader() });
       if (!res.data.success) throw new Error(res.data.message || '提交失败');
@@ -302,7 +297,6 @@ const submit = async () => {
         fd.append(`title_${i}`, e.title);
         fd.append(`requirements_${i}`, e.requirements);
         fd.append(`body_${i}`, e.body);
-        fd.append(`student_${i}`, e.student);
         e.files.forEach((file) => fd.append(`files_${i}`, file, file.name));
       });
       const res = await request.post('/api/review/batch', fd, { headers: ownerHeader() });
@@ -335,7 +329,7 @@ const resetForm = () => { essays.splice(0, essays.length, essayTemplate()); };
 .essay-title { display: flex; align-items: center; gap: 8px; font-size: var(--fs-md); font-weight: 600; margin: 0 0 14px; }
 .essay-hint { font-size: 12px; font-weight: 400; color: var(--c-text-muted); }
 
-.form-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
 .field-label { font-size: var(--fs-xs); color: var(--c-text-secondary); }
 .field-label em { color: var(--c-error); font-style: normal; }

@@ -30,7 +30,7 @@ request.interceptors.request.use((config) => {
     config.headers.set('Authorization', `Bearer ${token}`);
   }
 
-  // X-Username：数据归属标识，调用方显式提供时（如老师端指定学生）不覆盖
+  // X-Username：数据归属标识，调用方显式提供时不覆盖
   if (!config.headers.get('X-Username')) {
     config.headers.set('X-Username', getUser() || 'anonymous');
   }

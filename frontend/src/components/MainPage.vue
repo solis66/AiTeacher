@@ -10,7 +10,7 @@
       <div class="navbar-user">
         <span class="user-avatar">{{ currentUser?.charAt(0).toUpperCase() || 'U' }}</span>
         <span class="user-name">{{ currentUser || '用户' }}</span>
-        <span v-if="roleLabel" class="role-badge" :class="`role-badge--${role}`">{{ roleLabel }}</span>
+        <span v-if="roleLabel" class="role-badge" :class="isAdmin ? 'role-badge--admin' : 'role-badge--student'">{{ roleLabel }}</span>
         <button type="button" class="logout-btn" @click="handleLogout">退出</button>
       </div>
     </header>
@@ -41,7 +41,7 @@
               @select="openReview"
             />
 
-            <!-- AI咨询：其下展示新对话入口 + 最近 7 天的会话记录 -->
+            <!-- AI老师：其下展示新对话入口 + 最近 7 天的会话记录 -->
             <div v-if="item.key === 'consult' && page === 'consult'" class="side-sub">
               <button type="button" class="new-chat-btn" @click="startNewConversation">
                 <Plus :size="15" />
@@ -76,7 +76,7 @@
 
       <!-- ===================== 右侧内容区 ===================== -->
       <main class="app-main">
-        <!-- 开始批改 -->
+        <!-- 作文批改 -->
         <ReviewSubmit
           v-if="page === 'submit'"
           :username="currentUser"
@@ -99,21 +99,13 @@
           :username="currentUser"
         />
 
-        <!-- 班级：老师看「班级管理」，学生看「我的班级」 -->
-        <TeacherClassroom
-          v-else-if="page === 'classroom' && isTeacher"
+        <!-- 用户管理（仅管理员可见） -->
+        <UserManagement
+          v-else-if="page === 'admin-users' && isAdmin"
           :username="currentUser"
-          @error="showError"
-        />
-        <StudentClassroom
-          v-else-if="page === 'classroom'"
-          :username="currentUser"
-          @error="showError"
-          @submitted="handleSubmitted"
-          @open-review="openReview"
         />
 
-        <!-- AI 咨询（只读对话，零批改入口；会话列表在全局侧边栏「AI咨询」下） -->
+        <!-- AI 老师（只读对话，零批改入口；会话列表在全局侧边栏「AI老师」下） -->
         <section v-else class="consult-page">
           <ChatHistory
             :messages="messages"
@@ -164,55 +156,61 @@
  *
  * 需求对应（三：页面布局）：
  * - 顶部导航栏（品牌 + 用户信息）+ 左侧边栏 + 右侧内容区
- * - 页面切换入口只在侧边栏：开始批改 / 批改结果 / 学情报告 / AI咨询，
- *   且「批改结果」下展示作文列表、「AI咨询」下展示会话记录
+ * - 页面切换入口只在侧边栏：AI老师 / 作文批改 / 批改结果 / 学情报告，
+ *   管理员额外有「用户管理」；「批改结果」下展示作文列表、「AI老师」下展示会话记录
  * - 仅登录取用；各页之间用本地视图切换，不引入 vue-router
- * - AI咨询页为纯 RAG 咨询对话，不挂任何上传/批改表单（零批改入口）
+ * - AI老师页为纯 RAG 咨询对话，不挂任何上传/批改表单（零批改入口）
  */
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
 import {
   Calculator, ClipboardList, BarChart3, MessagesSquare,
-  GraduationCap, Send, Loader2, AlertCircle, Plus, Users, School
+  GraduationCap, Send, Loader2, AlertCircle, Plus, Users
 } from 'lucide-vue-next';
 import request from '../api/request.js';
-import { getToken, getUser, clearAuth, getRole, getRoleLabel } from '../utils/auth.js';
+import {
+  getToken, getUser, clearAuth, getRoleLabel, isAdmin as isAdminAccount
+} from '../utils/auth.js';
 import ChatHistory from './ChatHistory.vue';
 import ReviewRail from './review/ReviewRail.vue';
 import ReviewWorkbench from './review/ReviewWorkbench.vue';
 import ReviewSubmit from './review/ReviewSubmit.vue';
 import LearningReport from './report/LearningReport.vue';
-import TeacherClassroom from './classroom/TeacherClassroom.vue';
-import StudentClassroom from './classroom/StudentClassroom.vue';
+import UserManagement from './admin/UserManagement.vue';
 
 const emit = defineEmits(['logout']);
 
-// 账号类型（老师 / 学生）：决定侧边栏显示哪些入口与班级页展示哪一端。
+// 账号类型（管理员 / 学生）：管理员额外拥有「用户管理」入口。
 // 真正的权限判定在服务端按 users.role 复核，改这里只能改界面、改不了权限。
-const role = ref(getRole());
 const roleLabel = computed(() => getRoleLabel());
-const isTeacher = computed(() => role.value === 'teacher');
+const isAdmin = computed(() => isAdminAccount());
 
-const navItems = computed(() => [
-  { key: 'submit', label: '开始批改', icon: Calculator },
-  { key: 'results', label: '批改结果', icon: ClipboardList },
-  { key: 'profile', label: '学情报告', icon: BarChart3 },
-  isTeacher.value
-    ? { key: 'classroom', label: '班级管理', icon: Users }
-    : { key: 'classroom', label: '我的班级', icon: School },
-  { key: 'consult', label: 'AI咨询', icon: MessagesSquare },
-]);
+// AI 老师置于侧边栏首位；「用户管理」仅管理员可见。
+const navItems = computed(() => {
+  const items = [
+    { key: 'consult', label: 'AI老师', icon: MessagesSquare },
+    { key: 'submit', label: '作文批改', icon: Calculator },
+    { key: 'results', label: '批改结果', icon: ClipboardList },
+    { key: 'profile', label: '学情报告', icon: BarChart3 },
+  ];
+  if (isAdmin.value) items.push({ key: 'admin-users', label: '用户管理', icon: Users });
+  return items;
+});
 
 // ---------------- 认证与全局状态 ----------------
 // 直接同步初始化：子组件的 onMounted 早于父组件执行，若等到父组件 onMounted 再赋值，
 // 子组件首次请求会带上空的 username（回退成 anonymous），导致接口查不到数据、页面空白
 const currentUser = ref(getUser());
-// 刷新后恢复上次所在的页面与打开的批改记录（localStorage），而不是每次都回到「开始批改」
+// 刷新后恢复上次所在的页面与打开的批改记录（localStorage），而不是每次都回到「作文批改」
 const PAGE_KEY = 'ai_teacher_last_page';
 const REVIEW_KEY = 'ai_teacher_last_review_id';
 const SESSION_KEY = 'ai_teacher_last_session_id';
-const VALID_PAGES = ['submit', 'results', 'profile', 'classroom', 'consult'];
+const VALID_PAGES = ['consult', 'submit', 'results', 'profile', 'admin-users'];
 const storedPage = localStorage.getItem(PAGE_KEY);
-const page = ref(VALID_PAGES.includes(storedPage) ? storedPage : 'submit');
+// 旧版本可能持久化过已下线的 classroom 页面，非法值统一回落到作文批改
+const initialPage = VALID_PAGES.includes(storedPage) && (storedPage !== 'admin-users' || isAdmin.value)
+  ? storedPage
+  : 'submit';
+const page = ref(initialPage);
 const activeReviewId = ref(localStorage.getItem(REVIEW_KEY) || null);
 const fullscreenImage = ref(null);
 const errorMessage = ref('');
@@ -273,6 +271,8 @@ const showError = (message) => {
 // 统一切换页面并持久化，保证刷新后能回到上次所在页面
 const go = (key) => {
   if (!VALID_PAGES.includes(key)) key = 'submit';
+  // 非管理员不能通过篡改 localStorage 进入用户管理页
+  if (key === 'admin-users' && !isAdmin.value) key = 'submit';
   page.value = key;
   localStorage.setItem(PAGE_KEY, key);
 };
@@ -487,6 +487,29 @@ const handleLogout = () => {
 const previewImageFull = (imageUrl) => { fullscreenImage.value = imageUrl; };
 const closeFullscreenImage = () => { fullscreenImage.value = null; };
 
+// ---------------- 在线状态心跳：让管理员端能判断用户是否在线 ----------------
+// 仅登录后定期上报，失败静默忽略（断网/后端抖动不应影响正常使用）。
+const PRESENCE_INTERVAL_MS = 60 * 1000;
+let presenceTimer = null;
+
+const pingPresence = async () => {
+  try {
+    await request.post('/api/presence/ping');
+  } catch (e) {
+    /* 心跳失败不打扰用户 */
+  }
+};
+
+onMounted(() => {
+  pingPresence();
+  presenceTimer = setInterval(pingPresence, PRESENCE_INTERVAL_MS);
+});
+
+onUnmounted(() => {
+  if (presenceTimer) clearInterval(presenceTimer);
+  presenceTimer = null;
+});
+
 onMounted(async () => {
   // 先取最近 7 天的会话列表，再打开「上次浏览的会话」；
   // 该会话已被删除或不在展示窗口内时，退回最近一个会话，避免白屏
@@ -521,9 +544,9 @@ onMounted(async () => {
 .navbar-user { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .user-avatar { display: grid; place-items: center; width: 28px; height: 28px; font-size: var(--fs-sm); font-weight: 600; color: #fff; background: var(--c-primary); border-radius: 50%; }
 .user-name { font-size: var(--fs-sm); color: var(--c-text); }
-/* 账号类型标识：老师用主色、学生用中性色，一眼区分当前登录身份 */
+/* 账号类型标识：管理员用主色、学生用中性色，一眼区分当前登录身份 */
 .role-badge { padding: 2px 8px; font-size: 11px; line-height: 1.6; border-radius: var(--r-pill); }
-.role-badge--teacher { color: #fff; background: var(--c-primary); }
+.role-badge--admin { color: #fff; background: var(--c-primary); }
 .role-badge--student { color: var(--c-text-secondary); background: var(--c-bg-muted); }
 .logout-btn { padding: 5px 12px; font-family: inherit; font-size: var(--fs-xs); border: 1px solid var(--c-border); border-radius: var(--r-md); background: transparent; color: var(--c-text-secondary); cursor: pointer; }
 .logout-btn:hover { color: var(--c-error); border-color: var(--c-error); }

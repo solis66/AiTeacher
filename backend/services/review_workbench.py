@@ -97,7 +97,7 @@ class ReviewWorkbench:
     # -------------------------------------------------------------- 创建与执行
 
     def create(self, owner, grade, essay_type, title, requirements, body, uploads,
-               student=None, assignment_id=None):
+               student=None):
         """
         创建一条批改记录并启动后台批改。
 
@@ -109,16 +109,13 @@ class ReviewWorkbench:
             requirements: 题干要求（可选）
             body:         直接输入的作文正文（可选）
             uploads:      [(原始文件名, 二进制内容)]，按用户排列顺序传入
-            student:      作文所属学生（可选）
-            assignment_id: 关联的作文训练 id（学生从「我的班级」提交作业时带；普通批改留空）
+            student:      作文所属学生（可选，缺省为提交者本人）
 
-        关于 owner 与 student 的分工（2026-09 新增）：
+        关于 owner 与 student 的分工：
             owner 是「提交者 / 租户」，用于数据隔离，沿用既有 X-Username 约定；
             student 是「这篇作文属于哪个学生」，用于学情检索与个性化建议。
-            - 学生自己提交：student 留空 → 落库时取 owner，行为与改造前一致
-            - 老师代学生提交：student 填学生名
-            两者分离的原因：老师的账号下会有很多学生，若把 owner 当学生用，
-            老师就无法咨询「某个学生」的学情。
+            当前账号体系只有学生，student 通常留空并回退为 owner；
+            字段保留是为了兼容历史数据。
 
         返回：
             dict: 新建的记录
@@ -165,9 +162,6 @@ class ReviewWorkbench:
                 'id': record_id,
                 'owner': owner,
                 'student': student,
-                # 作业提交才有值；老师的「班级提交 / 班级学情」按它聚合。
-                # 统一转成字符串：查询侧来自 URL 与 SQLite 的都是字符串，避免 1 != '1'。
-                'assignment_id': str(assignment_id) if assignment_id else None,
                 'version': 1,
                 'status': 'queued',
                 'error': None,
@@ -319,7 +313,7 @@ class ReviewWorkbench:
         """
         列出该 owner 名下出现过的全部学生名（去重，按记录数从多到少）。
 
-        用途：老师咨询时用它把「某个学生」识别出来——名单直接从既有数据推导，
+        用途：咨询时用它把「某个学生」识别出来——名单直接从既有数据推导，
         不需要额外维护一张学生表。
         """
         counts = {}
