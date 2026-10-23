@@ -44,6 +44,7 @@ from utils.text_classifier import classify_text, is_essay_submission as classifi
 from services.consultation_service import answer_consultation, stream_answer_consultation
 from services import consult_context
 from services import user_service
+from services import memory_service
 from utils import db_config
 from utils.chat_memory import normalize_history
 from utils.file_lock import file_lock
@@ -1361,6 +1362,14 @@ def chat():
             parsed['essayType'] = parsed.get('essay_type', essay_type)
             parsed['response_type'] = 'essay_review'
         elif text_type == 'consultation':
+            # 滚动摘要 + 长期记忆：只读注入，读取失败就当没有记忆，绝不影响本次回答。
+            # 放在咨询分支内而不是更外层：粘贴作文走的是批改流程，不该为它多算一次记忆检索。
+            memory_block = ''
+            try:
+                memory_block = memory_service.build_prompt_block(current_user, session_id, message)
+            except Exception as exc:
+                logger.warning('[记忆] 读取失败，本次不注入记忆: %s', exc)
+
             # 前端请求流式输出时（stream=true），咨询回答按 SSE 逐 token 增量推送
             if data.get('stream') is True:
                 # 会话ID在生成器启动前定下来：前端收到 session 事件后即可持久化它，
@@ -1377,7 +1386,8 @@ def chat():
                     yield frame({'type': 'session', 'session_id': stream_session_id})
                     try:
                         for evt in stream_answer_consultation(
-                                message, history, owner=current_user, role=role, student=student_hint):
+                                message, history, owner=current_user, role=role,
+                                student=student_hint, memory_block=memory_block):
                             evt_type = evt.get('type')
                             if evt_type == 'delta':
                                 parts.append(evt.get('content') or '')
@@ -1396,7 +1406,11 @@ def chat():
                     # 放在后面可能因连接关闭而丢最后一轮。
                     # 出错或回答为空时不写，避免把错误提示当成 AI 的历史回答。
                     if not failed and parts:
-                        append_chat_turn(current_user, stream_session_id, message, ''.join(parts))
+                        persisted_id = append_chat_turn(
+                            current_user, stream_session_id, message, ''.join(parts))
+                        # 摘要与长期记忆都要调模型，放后台线程，不拖慢回答
+                        memory_service.schedule_refresh(
+                            current_user, persisted_id, load_session(current_user, persisted_id))
                     yield frame({'type': 'done'})
 
                 sse_resp = Response(_consult_stream(), mimetype='text/event-stream')
@@ -1407,7 +1421,8 @@ def chat():
 
             # 咨询类问题，使用新的咨询服务（携带本会话最近的对话轮次与学情检索范围）
             consult_result = answer_consultation(message, history,
-                                                 owner=current_user, role=role, student=student_hint)
+                                                 owner=current_user, role=role,
+                                                 student=student_hint, memory_block=memory_block)
             
             if consult_result['success']:
                 response = consult_result['content']
@@ -1444,6 +1459,8 @@ def chat():
                 }
             # 非流式同样由服务端落盘；返回的 session_id 让前端继续同一会话
             session_id = append_chat_turn(current_user, session_id, message, response)
+            memory_service.schedule_refresh(
+                current_user, session_id, load_session(current_user, session_id))
         else:
             # 未知类型，降级到原有的咨询方式
             logger.warning(f"[Chat] 文本类型未知({text_type})，使用原有咨询方式")

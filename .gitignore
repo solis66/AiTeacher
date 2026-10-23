@@ -27,7 +27,8 @@ review_index_state.json
 
 # 批改运行数据（用户上传的作文图片、识别结果与 SQLite 库）
 **/data/reviews/
-*.sqlite3
+# 同时覆盖 SQLite 的 -wal / -shm 伴生文件（WAL 模式下运行时会产生）
+*.sqlite3*
 
 # IDE / 工具状态
 .idea/

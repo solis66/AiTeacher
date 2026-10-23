@@ -604,7 +604,8 @@ class ConsultationService:
         return response.content if hasattr(response, 'content') else str(response)
 
     def _generate_ai_response(self, question: str, history=None, owner: str = '',
-                              role: str = 'auto', student: str = '') -> str:
+                              role: str = 'auto', student: str = '',
+                              memory_block: str = '') -> str:
         """
         使用AI模型生成回答
 
@@ -652,8 +653,8 @@ class ConsultationService:
         except Exception as exc:
             logger.error(f"[AI响应生成] 参考资料装配失败，降级为无资料回答: {exc}")
 
-        prompt_core = self._build_consultation_prompt(question, context=context)
-        prompt_full = self._build_consultation_prompt(question, history, context=context)
+        prompt_core = self._build_consultation_prompt(question, context=context, memory_block=memory_block)
+        prompt_full = self._build_consultation_prompt(question, history, context=context, memory_block=memory_block)
         logger.info(
             f"[AI响应生成] 提示词长度: 主路径 {len(prompt_core)} / 含记忆 {len(prompt_full)}"
         )
@@ -723,7 +724,8 @@ class ConsultationService:
         return "抱歉，我暂时无法回答这个问题，请稍后重试。"
     
     def _generate_ai_response_stream(self, question: str, history=None, owner: str = '',
-                                     role: str = 'auto', student: str = '') -> Iterator[Tuple[str, str]]:
+                                     role: str = 'auto', student: str = '',
+                                     memory_block: str = '') -> Iterator[Tuple[str, str]]:
         """
         流式生成AI回答（yield 增量文本）
 
@@ -748,8 +750,8 @@ class ConsultationService:
         except Exception as exc:
             logger.error(f"[AI响应生成-流式] 参考资料装配失败，降级为无资料回答: {exc}")
 
-        prompt_core = self._build_consultation_prompt(question, context=context)
-        prompt_full = self._build_consultation_prompt(question, history, context=context)
+        prompt_core = self._build_consultation_prompt(question, context=context, memory_block=memory_block)
+        prompt_full = self._build_consultation_prompt(question, history, context=context, memory_block=memory_block)
 
         # 方式1：尝试使用ReactAgent（逐 token 流式）
         try:
@@ -798,7 +800,8 @@ class ConsultationService:
         logger.error("[AI响应生成-流式] 所有AI调用方式均失败")
         yield ('error', '抱歉，我暂时无法回答这个问题，请稍后重试。')
 
-    def _build_consultation_prompt(self, question: str, history=None, context: dict = None) -> str:
+    def _build_consultation_prompt(self, question: str, history=None,
+                                   context: dict = None, memory_block: str = '') -> str:
         """
         构建专业咨询提示词
 
@@ -828,6 +831,12 @@ class ConsultationService:
             if rendered:
                 context_block = f'{rendered}\n\n'
 
+        # 滚动摘要 + 长期记忆：由 memory_service 组装好整段文本，这里只负责落位。
+        # 放在参考资料之前——先建立"这个人是谁"，再给通用资料。
+        memory_section = ''
+        if (memory_block or '').strip():
+            memory_section = f'{memory_block.strip()}\n\n'
+
         scope = (context or {}).get('scope') or 'none'
         student = (context or {}).get('student') or ''
         if scope == 'student':
@@ -851,7 +860,7 @@ class ConsultationService:
 
 {persona}
 
-{history_block}{context_block}请针对以下问题提供专业、详细且适合理解对象水平的回答：
+{history_block}{memory_section}{context_block}请针对以下问题提供专业、详细且适合理解对象水平的回答：
 
 问题：{question}
 
@@ -873,7 +882,7 @@ class ConsultationService:
         return prompt
     
     def answer_question(self, question: str, history=None, owner: str = '',
-                        role: str = 'auto', student: str = '') -> Dict[str, Any]:
+                        role: str = 'auto', student: str = '', memory_block: str = '') -> Dict[str, Any]:
         """
         回答用户咨询问题（核心入口方法）
 
@@ -954,7 +963,8 @@ class ConsultationService:
         # 5. 使用AI模型生成回答（携带学情数据与历史批改片段）
         logger.info("[咨询服务] 使用AI模型生成回答")
         ai_response = self._generate_ai_response(cleaned_question, history,
-                                                 owner=owner, role=role, student=student)
+                                                 owner=owner, role=role, student=student,
+                                                 memory_block=memory_block)
 
         return {
             'success': True,
@@ -963,7 +973,8 @@ class ConsultationService:
         }
     
     def stream_answer_question(self, question: str, history=None, owner: str = '',
-                               role: str = 'auto', student: str = '') -> Iterator[Dict[str, Any]]:
+                               role: str = 'auto', student: str = '',
+                               memory_block: str = '') -> Iterator[Dict[str, Any]]:
         """
         流式回答用户咨询问题（SSE 逐块产出）
 
@@ -1006,7 +1017,8 @@ class ConsultationService:
         # 5. AI 流式生成
         logger.info("[咨询服务-流式] 使用AI流式生成回答")
         for kind, piece in self._generate_ai_response_stream(
-                cleaned_question, history, owner=owner, role=role, student=student):
+                cleaned_question, history, owner=owner, role=role, student=student,
+                memory_block=memory_block):
             if kind == 'delta':
                 yield {'type': 'delta', 'content': piece, 'response_type': 'ai'}
             elif kind == 'error':
@@ -1038,7 +1050,8 @@ consultation_service = ConsultationService()
 
 
 def answer_consultation(question: str, history=None, owner: str = '',
-                        role: str = 'auto', student: str = '') -> Dict[str, Any]:
+                        role: str = 'auto', student: str = '',
+                        memory_block: str = '') -> Dict[str, Any]:
     """
     咨询服务便捷函数（对外暴露的接口）
 
@@ -1071,11 +1084,13 @@ def answer_consultation(question: str, history=None, owner: str = '',
         result = answer_consultation("李明的学情怎么样", owner="李老师", role="teacher")
     """
     return consultation_service.answer_question(question, history,
-                                                owner=owner, role=role, student=student)
+                                                owner=owner, role=role, student=student,
+                                                memory_block=memory_block)
 
 
 def stream_answer_consultation(question: str, history=None, owner: str = '',
-                               role: str = 'auto', student: str = '') -> Iterator[Dict[str, Any]]:
+                               role: str = 'auto', student: str = '',
+                               memory_block: str = '') -> Iterator[Dict[str, Any]]:
     """
     咨询服务流式便捷函数（对外暴露的接口，供 /chat stream=true 调用）
 
@@ -1083,4 +1098,5 @@ def stream_answer_consultation(question: str, history=None, owner: str = '',
     每个事件均为可 JSON 序列化 dict：{'type': 'delta'|'error'|'done', 'content'?, 'response_type'?}
     """
     return consultation_service.stream_answer_question(question, history,
-                                                       owner=owner, role=role, student=student)
+                                                       owner=owner, role=role, student=student,
+                                                       memory_block=memory_block)
