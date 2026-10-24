@@ -54,9 +54,9 @@ cases:
       no_error: true
 
   - id: latest-review-detail
-    query: "我最近那篇作文，老师在开头部分指出了什么问题？"
+    query: "我最近那篇作文的原文里，老师纠正了哪几个句子？"
     tags: [tool-use, single-review]
-    note: 不依赖标题也能跑；单篇问题必须先定位再查详情
+    note: 原文纠正只存在于 review_detail，不在任何注入片段里；不查就只能编，用来验证"非查不可"
     expect:
       tools_include: [search_reviews, review_detail]
       no_error: true
