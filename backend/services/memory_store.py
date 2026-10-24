@@ -78,6 +78,14 @@ class MemoryStore:
                 ' UNIQUE(owner, content))'
             )
             db.execute('CREATE INDEX IF NOT EXISTS user_memories_owner ON user_memories(owner)')
+            # 派生数据的元信息（目前只有"这批向量是用哪个模型算的"）。
+            # 单独一张表而不是塞进 user_memories：它是全局状态，不属于任何一条记忆。
+            db.execute(
+                'CREATE TABLE IF NOT EXISTS memory_meta ('
+                ' key TEXT PRIMARY KEY,'
+                ' value TEXT NOT NULL,'
+                ' updated_at TEXT NOT NULL)'
+            )
 
     def connect(self):
         return sqlite3.connect(self.db, timeout=15)
@@ -159,3 +167,65 @@ class MemoryStore:
                 ' updated_at=excluded.updated_at',
                 (owner, kind, content, embedding, now, now),
             )
+
+    # ------------------------------------------------------------ 向量模型元数据
+
+    def get_meta(self, key: str) -> str:
+        """读取元信息；不存在时返回空串。"""
+        with self.connect() as db:
+            row = db.execute('SELECT value FROM memory_meta WHERE key=?', (key,)).fetchone()
+        return (row[0] or '') if row else ''
+
+    def set_meta(self, key: str, value: str, now: str) -> None:
+        """写入元信息（覆盖旧值）。"""
+        with self.connect() as db:
+            db.execute(
+                'INSERT INTO memory_meta (key, value, updated_at) VALUES (?, ?, ?) '
+                'ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at',
+                (key, value, now),
+            )
+
+    def list_all_memories(self) -> List[Dict]:
+        """取出所有账号的记忆条目（重算向量时用，不按 owner 过滤）。"""
+        with self.connect() as db:
+            rows = db.execute(
+                'SELECT id, content, embedding FROM user_memories ORDER BY id'
+            ).fetchall()
+        return [{'id': row[0], 'content': row[1], 'embedding': row[2]} for row in rows]
+
+    def update_embedding(self, memory_id: int, embedding: Optional[bytes]) -> None:
+        """
+        只替换向量，不动 updated_at。
+
+        updated_at 决定"最近记忆优先"的排序与注入顺序；重算向量不是用户产生的新信息，
+        改时间会让旧记忆凭空排到最前面。
+        """
+        with self.connect() as db:
+            db.execute('UPDATE user_memories SET embedding=? WHERE id=?', (embedding, int(memory_id)))
+
+    def clear_embeddings(self) -> None:
+        """
+        清空全部记忆向量。
+
+        用途：向量模型已变更但向量服务此刻不可用。旧模型的向量与新问句不可比，
+        留着只会让排序悄悄错乱；清空后退回"按最近更新"的降级路径，语义可接受。
+        """
+        with self.connect() as db:
+            db.execute('UPDATE user_memories SET embedding=NULL')
+
+    def list_memories_missing_embedding(self, limit: int = 64) -> List[Dict]:
+        """
+        取出向量为空的记忆条目（供补算守卫使用）。
+
+        空向量是"写入时向量服务不可用"留下的：内容有价值必须保留，向量只能后补。
+        这里限制单批条数，避免一次补算把外部接口打满。
+        """
+        with self.connect() as db:
+            rows = db.execute(
+                'SELECT id, owner, content FROM user_memories '
+                'WHERE embedding IS NULL OR length(embedding) = 0 '
+                'ORDER BY id LIMIT ?',
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [{'id': row[0], 'owner': row[1], 'content': row[2]} for row in rows]
+

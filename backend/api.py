@@ -87,6 +87,9 @@ app.register_blueprint(admin_bp)
 # 不做成"启动时同步建库并等待"——作文很多时首次建索引要调用 embedding 接口，
 # 可能耗时数分钟；失败也不影响服务启动，咨询会降级为无资料回答。
 consult_context.initialize()
+# 向量模型变更守卫：记忆向量是持久化 BLOB，换 embedding 模型后旧向量与新问句
+# 不可比（排序会悄悄错乱，且不报错）。启动时后台比对模型名，不一致就整批重算。
+memory_service.schedule_embedding_guard()
 
 def validate_system_config():
     """

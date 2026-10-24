@@ -19,11 +19,12 @@ import json
 import math
 import re
 import threading
+import time
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from services.memory_store import MemoryStore, pack_embedding, unpack_embedding
-from utils.config_handler import chroma_conf
+from utils.config_handler import chroma_conf, rag_conf
 from utils.logger_handler import logger
 
 _CONSULT = chroma_conf.get('consult') or {}
@@ -85,6 +86,19 @@ STORE = MemoryStore()
 _running = set()
 _running_lock = threading.Lock()
 
+# 向量模型守卫：记忆向量是持久化的 BLOB，只有写入那一刻的模型算得对它。
+# 换模型后旧向量与新问句不可比，而检索不会报错——只是悄悄排错。这里把
+# "当前用的哪个模型"记进库，启动/整理时比对，不一致就整批重算。
+EMBEDDING_META_KEY = 'embedding_model'
+_EMBED_BATCH_SIZE = 16
+# 空向量补算：写入时向量化失败会留下无向量的条目，需要事后补。
+# 补算要调外部接口，失败后必须冷却，否则每轮对话都会重打一次。
+EMPTY_VECTOR_REPAIR_INTERVAL = max(30, int(_CONSULT.get('memory_empty_vector_repair_interval', 300)))
+EMPTY_VECTOR_REPAIR_BATCH = max(1, int(_CONSULT.get('memory_empty_vector_repair_batch', 64)))
+_model_guard_lock = threading.Lock()
+_model_checked = False
+_last_vector_repair = 0.0
+
 
 # ---------------------------------------------------------------- 模型调用
 
@@ -135,6 +149,153 @@ def _embed_query(text: str) -> List[float]:
     except Exception as exc:
         logger.warning('[记忆] 问句向量化失败: %s', exc)
         return []
+
+
+def _now_text() -> str:
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _embed_in_batches(texts: List[str]) -> List[List[float]]:
+    """
+    分批向量化。
+
+    返回空列表表示失败——调用方据此判断"整批没做成"，
+    绝不能只更新一部分（那样库里会同时存在两个模型的向量）。
+    """
+    vectors: List[List[float]] = []
+    for start in range(0, len(texts), _EMBED_BATCH_SIZE):
+        batch = texts[start:start + _EMBED_BATCH_SIZE]
+        chunk = _embed_documents(batch)
+        if len(chunk) != len(batch):
+            return []
+        vectors.extend(chunk)
+    return vectors
+
+
+def current_embedding_model_name() -> str:
+    """当前配置里的向量模型名（作为"这批向量是谁算的"的标识）。"""
+    return str(rag_conf.get('embedding_model_name') or '').strip()
+
+
+def ensure_embedding_model(force: bool = False) -> bool:
+    """
+    向量模型变更守卫：模型名与库里记录的不一致时，重算全部记忆向量。
+
+    为什么必须自动做：memory 向量是持久化 BLOB，换模型后旧向量与新问句
+    不可比——检索不会报错，只是排序悄悄变错。这类问题在功能上"看起来正常"，
+    不主动修就永远不会被发现。
+
+    返回：
+        bool - True 表示当前库里的向量已是当前模型算的（含无需重算的情况）；
+               False 表示重算失败（向量服务不可用），旧向量已清空，稍后重试。
+
+    失败策略：先清空旧向量再放弃，绝不保留"旧模型向量"参与排序；
+    元数据不推进，下次启动或下次整理时会再次尝试。
+    """
+    global _model_checked
+
+    model_name = current_embedding_model_name()
+    if not model_name:
+        return False
+    if _model_checked and not force:
+        return True
+
+    with _model_guard_lock:
+        if _model_checked and not force:
+            return True
+
+        if STORE.get_meta(EMBEDDING_META_KEY) == model_name:
+            _model_checked = True
+            return True
+
+        items = STORE.list_all_memories()
+        if not items:
+            STORE.set_meta(EMBEDDING_META_KEY, model_name, _now_text())
+            _model_checked = True
+            return True
+
+        vectors = _embed_in_batches([item['content'] for item in items])
+        if len(vectors) != len(items):
+            STORE.clear_embeddings()
+            logger.warning(
+                '[记忆] 向量模型已变更为 %s，但向量服务不可用：已清空 %d 条旧向量，稍后重试',
+                model_name, len(items))
+            return False
+
+        for item, vector in zip(items, vectors):
+            STORE.update_embedding(item['id'], pack_embedding(vector))
+        STORE.set_meta(EMBEDDING_META_KEY, model_name, _now_text())
+        _model_checked = True
+        logger.info('[记忆] 向量模型已变更为 %s，已重算 %d 条记忆向量', model_name, len(items))
+        return True
+
+
+def ensure_missing_embeddings(force: bool = False) -> bool:
+    """
+    空向量补算守卫：给 embedding 为空的历史记忆补上向量。
+
+    为什么需要单独一条守卫：`_save_items` 在向量服务不可用时仍会写入内容
+    （内容有价值，不能丢），只把向量留空。而模型变更守卫只在"换模型"时触发，
+    模型名没变时这些空向量永远补不上——表现就是"记忆都在，但条目超过阈值后
+    语义排序里永远查不到它们"。
+
+    节流：向量化是外部接口调用，一次失败后不能每轮对话都重打。同一进程默认
+    最多 5 分钟尝试一次；先打时间戳再调用，失败也进入冷却。
+
+    返回：
+        False 仅表示"本次尝试补算但失败"；
+        被节流跳过、或没有待补条目时返回 True。
+    """
+    global _last_vector_repair
+
+    if not force and time.monotonic() - _last_vector_repair < EMPTY_VECTOR_REPAIR_INTERVAL:
+        return True
+
+    # 与模型守卫共用一把锁：两者都在改 user_memories.embedding，
+    # 并发写会让同一批向量混进两个模型的输出。
+    with _model_guard_lock:
+        if not force and time.monotonic() - _last_vector_repair < EMPTY_VECTOR_REPAIR_INTERVAL:
+            return True
+        _last_vector_repair = time.monotonic()
+
+        items = STORE.list_memories_missing_embedding(EMPTY_VECTOR_REPAIR_BATCH)
+        if not items:
+            return True
+
+        vectors = _embed_in_batches([item['content'] for item in items])
+        if len(vectors) != len(items):
+            logger.warning('[记忆] 空向量补算失败：%d 条待补，冷却后重试', len(items))
+            return False
+
+        for item, vector in zip(items, vectors):
+            STORE.update_embedding(item['id'], pack_embedding(vector))
+        logger.info('[记忆] 已补算 %d 条记忆向量', len(items))
+        return True
+
+
+def _run_vector_guards() -> None:
+    """
+    启动/整理时依次跑两条向量守卫。
+
+    模型守卫失败（向量服务不可用）时直接返回：它已经把旧向量清空，
+    此时再去补算只会对同一个接口再打一次，没有任何意义。
+    """
+    if ensure_embedding_model():
+        ensure_missing_embeddings()
+
+
+def schedule_embedding_guard() -> None:
+    """
+    启动时在后台检查一次。
+
+    不阻塞启动：模型没变时只是一次元数据查询；变了则要调用 embedding 接口，
+    记忆条数多时可能耗时数十秒，必须放在后台线程里。
+    """
+    threading.Thread(
+        target=_run_vector_guards,
+        name='memory-embedding-guard',
+        daemon=True,
+    ).start()
 
 
 # ---------------------------------------------------------------- 文本工具
@@ -311,6 +472,9 @@ def schedule_refresh(owner: str, session_id: str, messages: List[Dict]) -> None:
 
 def _refresh(owner: str, session_id: str, messages: List[Dict]) -> None:
     try:
+        # 每次后台整理都先校验向量（模型是否变更 + 是否有空向量待补）。
+        # 这样即便启动预热那一刻向量服务不可用，后续对话也能自动补上。
+        _run_vector_guards()
         refresh_now(owner, session_id, messages)
     except Exception as exc:
         logger.warning('[记忆] 后台整理失败: %s', exc)
