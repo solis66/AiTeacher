@@ -3,7 +3,7 @@
 # 说明：本机 dashscope 原生 SDK(1.25.13) 对较新模型名会误报 "url error"，
 #      因此统一改走阿里云百炼的 OpenAI 兼容模式端点。
 #      模型名需与该端点 /models 返回的 id 完全一致（qwen3.8-max-0902 已实测可用）。
-chat_model_name: qwen3.8-max-0902
+chat_model_name: qwen3.8-flash
 embedding_model_name: qwen3.7-text-embedding-flash
 base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 
