@@ -40,6 +40,18 @@ def search_knowledge(query: str) -> str:
     query = (query or '').strip()
     if not query:
         return '查询内容为空，请提供要检索的问题。'
+
+    # 小语料已由 knowledge_loader.get_context 完整注入本次 prompt。
+    # 再走一次向量检索只会重复一次 embedding 调用，并把同样的内容再说一遍；
+    # 这里直接告诉模型"资料已在上下文里"，让它基于已有资料作答。
+    # 兜底措辞保留"若上下文确实没有"这一句：资料装配失败时不能让它凭空断言。
+    if knowledge_loader.is_small_corpus():
+        return (
+            '本次提问已随上下文提供完整的教研资料，无需再次检索。'
+            '请直接依据上下文中的资料作答；若上下文中确实没有相关内容，'
+            '再基于通用教学常识回答，并说明这是通用建议。'
+        )
+
     return knowledge_loader.search_text(query)
 
 

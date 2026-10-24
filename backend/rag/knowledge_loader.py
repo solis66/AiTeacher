@@ -314,27 +314,30 @@ def search(query: str, k: int = None, threshold: float = None) -> List:
     return rerank(query, survivors, top_k, HYBRID_VECTOR_WEIGHT, HYBRID_LEXICAL_WEIGHT)
 
 
-def get_context(query: str, force_retrieval: bool = False) -> str:
+def get_context(query: str = '') -> str:
     """
     取得可注入 prompt 的教研资料文本。
 
-    小语料 → 全文（除非 force_retrieval）；
-    大语料或 force_retrieval → 检索结果；
-    无内容 → NO_REFERENCE_NOTE。
+    决策只看语料规模（实测 6182 字，远低于 full_inject_limit=12000）：
+        小语料 → 全文注入。这个规模下向量检索是负收益——会漏检，还要多一次
+        embedding 调用；而全文只有约 6k 字，prompt 完全放得下。
+        大语料 → 按问题检索相关小节，避免把几十万字塞进上下文。
 
-    force_retrieval 的使用场景：提问是「某个学生的学情」时，教研方法类资料
-    基本无关，此时按问题检索只取相关小节，比全文塞进去更省 token 也更少干扰。
+    重新评估的结论：个人学情类提问不再强制走向量检索。
+    此前对 scope != 'none' 的提问传 force_retrieval=True，等于在"全文本来就放得下"
+    时主动放弃完整性，只为省几千字——省下的 token 与漏掉资料的风险不成比例。
+
+    参数：
+        query: 用户提问（大语料下用于检索；小语料下不参与决策）
+
+    返回：
+        str - 可直接拼进 prompt 的资料文本；无内容时返回 NO_REFERENCE_NOTE
     """
     corpus = load_corpus()
     if not corpus:
         return NO_REFERENCE_NOTE
-
-    if is_small_corpus() and not force_retrieval:
+    if is_small_corpus():
         return render_full(corpus)
 
     hits = search(query)
-    if not hits:
-        # 小语料下检索为空通常是"确实没关系"，而不是"库没建"，
-        # 此时退回全文仍是安全的；大语料下则如实说明未检索到。
-        return render_full(corpus) if is_small_corpus() else NO_REFERENCE_NOTE
-    return render_hits(hits)
+    return render_hits(hits) if hits else NO_REFERENCE_NOTE

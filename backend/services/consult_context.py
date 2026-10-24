@@ -238,11 +238,9 @@ def build_context(message: str, owner: str, role: str = 'auto', student_hint: st
         if profile and not profile.get('has_data'):
             notes.append(f'{student} 名下暂无已完成的批改记录')
 
-    # 教研资料：学情类提问走检索（方法类资料与"某人学情"关系不大，只取相关小节），
-    # 方法类提问在小语料下全文注入。
+    # 教研资料：小语料下永远是全文注入，不再按"是否个人提问"切检索（见 knowledge_loader.get_context）
     try:
-        knowledge_text = knowledge_loader.get_context(
-            message, force_retrieval=(scope['scope'] != 'none'))
+        knowledge_text = knowledge_loader.get_context(message)
     except Exception as exc:
         knowledge_text = knowledge_loader.NO_REFERENCE_NOTE
         notes.append(f'教研资料加载失败：{exc}')
@@ -340,7 +338,9 @@ def initialize() -> Dict:
         try:
             result = get_index().sync()
             logger.info('[咨询检索] 索引同步完成：%s', result)
-            knowledge_loader.ensure_index()
+            logger.info('[知识库] 索引：%s', knowledge_loader.ensure_index())
+            # 把语料规模与注入模式打进启动日志：这是"全量注入 vs 检索"决策的唯一可见依据
+            logger.info('[知识库] 语料：%s', knowledge_loader.stats())
         except Exception as exc:
             logger.warning('[咨询检索] 索引同步失败（不影响服务启动）：%s', exc)
 

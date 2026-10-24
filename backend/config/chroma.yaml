@@ -25,8 +25,10 @@ consult:
   knowledge_chunk_overlap: 50
   knowledge_md5_store: md5_knowledge.text
   # 语料总字数低于该值时不做向量检索，直接全文注入 prompt。
-  # 依据：语料规模小时向量检索是负收益——有漏检、有延迟、要调 4 个参数，
-  # 而全量注入零漏检、零延迟、完全可控。超过该值再切到检索（见 knowledge_loader）。
+  # 实测（2026-10）：data/knowledge 下 4 个文件合计 6182 字，远低于该上限，
+  # 因此咨询链路（含"个人学情"类提问）实际全部走全文注入。
+  # 依据：6k 字只占上下文很小一部分，全量注入零漏检；检索会漏、还要多一次
+  # embedding 调用。语料超过该值后再切检索（见 knowledge_loader.get_context）。
   full_inject_limit: 12000
 
   # 批改案例库（review_cases：由 reviews.sqlite3 的 done 记录构建）
