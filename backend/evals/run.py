@@ -256,11 +256,56 @@ def _judge(case, answer, trace, variables):
     return reasons
 
 
-def _run_isolation(owner, records):
+def _done_id(records) -> str:
+    """取一条带批改结果的记录 id（详情才有可返回内容，避免状态提示干扰隔离判断）。"""
+    for record in records or []:
+        if record.get('status') == 'done' and record.get('result'):
+            return str(record.get('id') or '')
+    return ''
+
+
+def _pick_other_owner(owner: str) -> str:
+    """
+    挑一个隔离对照账号。
+
+    优先用已有批改记录的其它 owner；没有时再查 users 表里的其它账号。
+    线上第二个账号往往还没提交过作文，但它依然可以用自己的身份去尝试访问
+    他人的记录 id——这正是需要验证的隔离边界，不能因为"没有记录"就跳过。
+    """
+    db = _db_path()
+    if db.exists():
+        try:
+            con = sqlite3.connect(f'file:{db}?mode=ro', uri=True, timeout=10)
+            try:
+                row = con.execute(
+                    'SELECT owner FROM reviews WHERE owner <> ? '
+                    'GROUP BY owner ORDER BY COUNT(*) DESC LIMIT 1',
+                    (owner,),
+                ).fetchone()
+            finally:
+                con.close()
+            if row and (row[0] or '').strip():
+                return row[0].strip()
+        except Exception:
+            pass
+
+    try:
+        from services.user_service import list_users
+        for item in list_users():
+            account = (item.get('account') or '').strip()
+            if account and account != owner:
+                return account
+    except Exception:
+        pass
+    return ''
+
+
+def _run_isolation(owner, records, other_owner):
     """
     数据隔离检查（不调模型，确定性）：
-        1. search_reviews 的返回里不能出现他人记录 id；
-        2. 拿他人的 id 调 review_detail 必须查不到。
+        1. 每个账号检索到的 id 必须都属于自己；
+        2. 用他人记录 id 调详情必须查不到（双向验证）。
+    对照账号可以没有任何批改记录：此时它的检索应为空、拿本人 id 也应查不到。
     返回 (reasons, skipped) 。
     """
     reasons = []
@@ -271,33 +316,44 @@ def _run_isolation(owner, records):
     if leaked:
         reasons.append(f'检索返回了他人记录：{leaked[:2]}')
 
-    other_id = ''
-    db = _db_path()
-    if db.exists():
-        try:
-            con = sqlite3.connect(f'file:{db}?mode=ro', uri=True, timeout=10)
-            try:
-                row = con.execute(
-                    'SELECT id FROM reviews WHERE owner <> ? LIMIT 1', (owner,)
-                ).fetchone()
-            finally:
-                con.close()
-            other_id = row[0] if row else ''
-        except Exception:
-            other_id = ''
-
-    if not other_id:
+    if not other_owner or other_owner == owner:
         return reasons, True
 
-    detail = review_detail.func(_Runtime(owner), record_id=other_id)
-    if '未找到' not in detail:
-        reasons.append('跨账号详情未被拒绝')
+    other_records = ReviewStore(REVIEW_ROOT).list(other_owner) or []
+    other_ids = {str(r.get('id')) for r in other_records}
+    other_listing = search_reviews.func(_Runtime(other_owner), limit=8)
+    leaked_to_other = [
+        rid for rid in re.findall(r'id=([0-9a-f]+)', other_listing) if rid not in other_ids
+    ]
+    if leaked_to_other:
+        reasons.append(f'第二账号检索返回了他人记录：{leaked_to_other[:2]}')
+
+    checked_detail = False
+    my_id = _done_id(records)
+    if my_id:
+        checked_detail = True
+        detail = review_detail.func(_Runtime(other_owner), record_id=my_id)
+        if '未找到' not in detail:
+            reasons.append('第二账号可查看他人记录详情')
+
+    other_id = _done_id(other_records)
+    if other_id:
+        checked_detail = True
+        detail = review_detail.func(_Runtime(owner), record_id=other_id)
+        if '未找到' not in detail:
+            reasons.append('跨账号详情未被拒绝')
+
+    # 双向都没有可用的 done 记录时，详情隔离实际上没被执行到
+    if not checked_detail and not reasons:
+        return reasons, True
     return reasons, False
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description='咨询 Agent 评测 harness')
     parser.add_argument('--owner', default='', help='被评测账号（默认取记录最多的账号）')
+    parser.add_argument('--other-owner', default='',
+                        help='隔离检查用的第二账号（可以没有批改记录；默认自动挑选）')
     parser.add_argument('--cases', default=str(DEFAULT_CASES), help='用例文件')
     parser.add_argument('--tag', default='', help='只跑指定标签')
     parser.add_argument('--case', default='', help='只跑指定用例 id（失败复跑用）')
@@ -322,6 +378,14 @@ def main() -> int:
     if args.limit > 0:
         cases = cases[:args.limit]
 
+    # 隔离检查需要第二账号；只在本次确实要跑隔离用例时才去查库/用户表
+    other_owner = ''
+    if any(case.get('check') == 'tool_isolation' for case in cases):
+        other_owner = (args.other_owner or '').strip() or _pick_other_owner(owner)
+        if other_owner == owner:
+            other_owner = ''
+        print(f"[评测] 隔离对照账号={other_owner or '未找到（将跳过）'}")
+
     results = []
     passed = failed = skipped = 0
     for case in cases:
@@ -329,9 +393,10 @@ def main() -> int:
         check = case.get('check')
 
         if check == 'tool_isolation':
-            reasons, was_skipped = _run_isolation(owner, records)
+            reasons, was_skipped = _run_isolation(owner, records, other_owner)
             status = 'skipped' if was_skipped else ('failed' if reasons else 'passed')
-            results.append({'id': case_id, 'status': status, 'reasons': reasons, 'tools': []})
+            results.append({'id': case_id, 'status': status, 'reasons': reasons,
+                            'tools': [], 'other_owner': other_owner})
             if status == 'passed':
                 passed += 1
             elif status == 'failed':
