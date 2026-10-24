@@ -338,9 +338,14 @@ def initialize() -> Dict:
         try:
             result = get_index().sync()
             logger.info('[咨询检索] 索引同步完成：%s', result)
-            logger.info('[知识库] 索引：%s', knowledge_loader.ensure_index())
-            # 把语料规模与注入模式打进启动日志：这是"全量注入 vs 检索"决策的唯一可见依据
-            logger.info('[知识库] 语料：%s', knowledge_loader.stats())
+            # 小语料走全文注入，索引不参与检索：跳过建库，省掉首次几十次 embedding 调用。
+            # 语料涨过 full_inject_limit 后会切到检索，届时有检索请求时按需建库。
+            stats = knowledge_loader.stats()
+            if stats.get('mode') == 'full':
+                logger.info('[知识库] 语料 %s 字，走全文注入，跳过向量索引构建', stats.get('chars'))
+            else:
+                logger.info('[知识库] 语料 %s 字，走检索，索引：%s',
+                            stats.get('chars'), knowledge_loader.ensure_index())
         except Exception as exc:
             logger.warning('[咨询检索] 索引同步失败（不影响服务启动）：%s', exc)
 

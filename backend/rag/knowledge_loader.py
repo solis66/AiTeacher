@@ -20,6 +20,7 @@
 import hashlib
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -62,6 +63,13 @@ _corpus_cache: Optional[List[Dict]] = None
 _corpus_signature: Optional[str] = None
 _chroma = None
 _index_ready = False
+
+# 小语料启动时不再预先建库（全文注入根本读不到索引）。真正需要检索时才按需构建。
+# 这两个变量避免并发请求重复建库，以及构建失败后每轮对话都重打 embedding 接口。
+_warm_lock = threading.Lock()
+_warming = False
+_last_warm_attempt = 0.0
+WARM_INTERVAL_SECONDS = 300
 
 
 # --------------------------------------------------------------------------- 语料
@@ -289,6 +297,40 @@ def search_text(query: str, k: int = None, threshold: float = None) -> str:
     return render_hits(hits) if hits else NO_REFERENCE_NOTE
 
 
+def _ensure_index_async():
+    """
+    索引未就绪时后台构建一次（按需构建）。
+
+    为什么不在启动时无条件建库：小语料走全文注入，索引根本读不到——启动时建库
+    纯粹是几十次 embedding 调用换一个"永远用不上"的集合。改为按需：语料增长到
+    需要检索时，第一次检索触发构建，本次请求降级为"无参考资料"，后台建完恢复。
+
+    失败冷却：建库调外部接口，失败后 5 分钟内不再尝试，避免每轮对话都重打。
+    """
+    global _warming, _last_warm_attempt
+
+    if _index_ready:
+        return
+    now = time.monotonic()
+    with _warm_lock:
+        if _index_ready or _warming:
+            return
+        if now - _last_warm_attempt < WARM_INTERVAL_SECONDS:
+            return
+        _warming = True
+        _last_warm_attempt = now
+
+    def _run():
+        global _warming
+        try:
+            ensure_index()
+        finally:
+            with _warm_lock:
+                _warming = False
+
+    threading.Thread(target=_run, name='knowledge-index-warm', daemon=True).start()
+
+
 def search(query: str, k: int = None, threshold: float = None) -> List:
     """
     向量检索教研资料（仅大语料路径使用）。
@@ -298,6 +340,11 @@ def search(query: str, k: int = None, threshold: float = None) -> List:
     """
     store = _get_chroma()
     if store is None or not (query or '').strip():
+        return []
+    if not _index_ready:
+        # 启动时跳过了建库（小语料用不到）。这里按需触发构建并先返回空结果：
+        # 建库要调 embedding 接口，不能把几分钟压进一次用户请求。
+        _ensure_index_async()
         return []
     limit = DEFAULT_THRESHOLD if threshold is None else threshold
     top_k = max(1, int(k or DEFAULT_K))
