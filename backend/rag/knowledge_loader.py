@@ -26,6 +26,7 @@ from typing import Dict, List, Optional
 from utils.config_handler import chroma_conf
 from utils.path_tool import get_abs_path
 from utils.retrieval_timeout import run_with_timeout
+from rag.hybrid import rerank
 
 _CONSULT = chroma_conf.get('consult') or {}
 
@@ -43,6 +44,10 @@ DEFAULT_THRESHOLD = float(_CONSULT.get('score_threshold', 0.20))
 # 之前这个配置项没人读，检索卡住时请求会一直挂着。
 RETRIEVAL_TIMEOUT = float(_CONSULT.get('timeout', 8))
 STATE_FILE = get_abs_path(_CONSULT.get('knowledge_md5_store', 'md5_knowledge.text'))
+
+HYBRID_CANDIDATE_FACTOR = max(1, int(_CONSULT.get('hybrid_candidate_factor', 3)))
+HYBRID_VECTOR_WEIGHT = float(_CONSULT.get('hybrid_vector_weight', 0.7))
+HYBRID_LEXICAL_WEIGHT = float(_CONSULT.get('hybrid_lexical_weight', 0.3))
 
 # 建库串行化锁。Flask 多线程下两个并发咨询会同时触发建库/更新，
 # 各自对本文件的 source 执行 delete + add，交错后同一份资料被写入两次，
@@ -294,16 +299,19 @@ def search(query: str, k: int = None, threshold: float = None) -> List:
     store = _get_chroma()
     if store is None or not (query or '').strip():
         return []
+    limit = DEFAULT_THRESHOLD if threshold is None else threshold
+    top_k = max(1, int(k or DEFAULT_K))
+    candidate_k = top_k * HYBRID_CANDIDATE_FACTOR
     try:
         raw = run_with_timeout(
-            lambda: store.similarity_search_with_relevance_scores(query, k=k or DEFAULT_K),
+            lambda: store.similarity_search_with_relevance_scores(query, k=candidate_k),
             RETRIEVAL_TIMEOUT,
             default=[],
         )
     except Exception:
         return []
-    limit = DEFAULT_THRESHOLD if threshold is None else threshold
-    return [(doc, score) for doc, score in raw if score is not None and score >= limit]
+    survivors = [(doc, score) for doc, score in raw if score is not None and score >= limit]
+    return rerank(query, survivors, top_k, HYBRID_VECTOR_WEIGHT, HYBRID_LEXICAL_WEIGHT)
 
 
 def get_context(query: str, force_retrieval: bool = False) -> str:

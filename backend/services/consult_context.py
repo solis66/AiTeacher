@@ -119,6 +119,44 @@ def resolve_scope(message: str, owner: str, role: str = 'auto',
 
 # --------------------------------------------------------------------------- 上下文装配
 
+def build_case_query(message: str, profile: Dict, max_terms: int = 3) -> str:
+    """
+    把学情画像并入案例检索问句。
+
+    为什么需要：学生问「我开头为什么总写不好」时，原始问句里只有"开头"两个字，
+    而他真正反复被指出的是"内容空洞""结构松散"。只按原句检索，命中的多是
+    别人写的开头技巧片段，而不是他自己被批过的问题。把画像里的薄弱维度与
+    反复出现的问题拼进 query，检索才会指向"这个人"。
+
+    参数：
+        message:   用户原始提问
+        profile:   index.student_profile() 的结果（可能为空字典）
+        max_terms: 每类最多拼入几个词，避免 query 被稀释
+
+    返回：
+        str - 拼好的检索问句；没有画像数据时原样返回提问
+
+    注意：只拼词、不拼「薄弱维度：」这类模板标签。标签词不会出现在任何评语片段里，
+    却会进入混合重排的覆盖率分母——分母变大、每条候选的字面覆盖被等比例稀释，
+    重排信号就废了。
+    """
+    question = (message or '').strip()
+    if not question or not isinstance(profile, dict):
+        return question
+
+    terms: Dict[str, None] = {}
+    for name in (profile.get('weak_dims') or [])[:max_terms]:
+        if name:
+            terms[str(name)] = None
+    for item in (profile.get('recurring_issues') or [])[:max_terms]:
+        if isinstance(item, dict) and item.get('aspect'):
+            terms[str(item['aspect'])] = None
+
+    if not terms:
+        return question
+    return f'{question} ' + ' '.join(terms.keys())
+
+
 def resolve(message: str, owner: str, role: str = 'auto', student: str = '') -> Dict:
     """
     轻量范围解析（不做检索、不调模型）。
@@ -178,6 +216,7 @@ def build_context(message: str, owner: str, role: str = 'auto', student_hint: st
     cases_text = ''
     profile: Dict = {}
     hits: List = []
+    case_query = message
 
     if scope['scope'] != 'none':
         student = scope['student']
@@ -188,8 +227,10 @@ def build_context(message: str, owner: str, role: str = 'auto', student_hint: st
         except Exception as exc:
             notes.append(f'学情聚合失败：{exc}')
 
+        # 案例检索的问句 = 原始提问 + 该学生的薄弱维度/反复问题
+        case_query = build_case_query(message, profile)
         try:
-            hits = index.search(message, student, owner=owner_filter)
+            hits = index.search(case_query, student, owner=owner_filter)
             cases_text = render_hits(hits)
         except Exception as exc:
             notes.append(f'批改片段检索失败：{exc}')
@@ -221,6 +262,7 @@ def build_context(message: str, owner: str, role: str = 'auto', student_hint: st
             'role': role,
             'known_students': known[:20],
             'top_scores': [round(float(s), 4) for _, s in hits[:5]],
+            'case_query': case_query,
             'sync': sync_result,
         },
     }
@@ -244,6 +286,7 @@ def _write_log(message: str, result: Dict) -> None:
             'student': result.get('student'),
             'n_cases': result.get('n_cases'),
             'top_scores': result.get('debug', {}).get('top_scores', []),
+            'case_query': (result.get('debug', {}).get('case_query') or '')[:200],
             'reason': result.get('debug', {}).get('reason'),
             'notes': result.get('notes', []),
         }

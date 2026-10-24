@@ -40,6 +40,7 @@ from typing import Dict, List, Optional, Tuple
 from utils.config_handler import chroma_conf
 from utils.path_tool import get_abs_path
 from utils.retrieval_timeout import run_with_timeout
+from rag.hybrid import rerank
 
 _CONSULT = chroma_conf.get('consult') or {}
 
@@ -51,6 +52,12 @@ DEFAULT_THRESHOLD = float(_CONSULT.get('score_threshold', 0.20))
 # 单次检索超时（秒），与 config/chroma.yaml 的 consult.timeout 对齐
 RETRIEVAL_TIMEOUT = float(_CONSULT.get('timeout', 8))
 MAX_REVIEWS = int(_CONSULT.get('case_max_reviews', 500))
+
+# 混合重排：召回候选 = k * factor，再按「向量分 + 字面覆盖」重排取 top-k。
+# 阈值仍作用在向量分上（0.20 是按向量尺度标定的，混入字面分会整体漂移）。
+HYBRID_CANDIDATE_FACTOR = max(1, int(_CONSULT.get('hybrid_candidate_factor', 3)))
+HYBRID_VECTOR_WEIGHT = float(_CONSULT.get('hybrid_vector_weight', 0.7))
+HYBRID_LEXICAL_WEIGHT = float(_CONSULT.get('hybrid_lexical_weight', 0.3))
 
 
 def _canonical_dim(dim) -> str:
@@ -589,18 +596,23 @@ class ReviewIndex:
             clauses.append({'kind': {'$in': list(kinds)}})
         where = clauses[0] if len(clauses) == 1 else {'$and': clauses}
 
+        limit = DEFAULT_THRESHOLD if threshold is None else threshold
+        top_k = max(1, int(k or DEFAULT_K))
+        # 候选集必须比 top_k 大：只有 6 条候选时"重排"只是把原顺序再排一遍，
+        # 扩大 3 倍才能让字面更贴合的片段有机会挤进前 k。
+        candidate_k = top_k * HYBRID_CANDIDATE_FACTOR
         try:
             raw = run_with_timeout(
                 lambda: store.similarity_search_with_relevance_scores(
-                    query, k=k or DEFAULT_K, filter=where),
+                    query, k=candidate_k, filter=where),
                 RETRIEVAL_TIMEOUT,
                 default=[],
             )
         except Exception:
             return []
 
-        limit = DEFAULT_THRESHOLD if threshold is None else threshold
-        return [(d, s) for d, s in raw if s is not None and s >= limit]
+        survivors = [(d, s) for d, s in raw if s is not None and s >= limit]
+        return rerank(query, survivors, top_k, HYBRID_VECTOR_WEIGHT, HYBRID_LEXICAL_WEIGHT)
 
     # ------------------------------------------------------------- 学情聚合
 
