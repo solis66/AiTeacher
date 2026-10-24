@@ -4,7 +4,7 @@
 #      因此统一改走阿里云百炼的 OpenAI 兼容模式端点。
 #      模型名需与该端点 /models 返回的 id 完全一致（qwen3.8-max-0902 已实测可用）。
 chat_model_name: qwen3.8-max-0902
-embedding_model_name: qwen3.7-text-embedding
+embedding_model_name: qwen3.7-text-embedding-flash
 base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 
 # 思考模式开关（百炼兼容模式的 enable_thinking 参数）
