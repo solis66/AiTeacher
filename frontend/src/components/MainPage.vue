@@ -41,7 +41,7 @@
               @select="openReview"
             />
 
-            <!-- AI老师：其下展示新对话入口 + 最近 7 天的会话记录 -->
+            <!-- AI老师：其下展示新对话入口 + 最近 30 天的会话记录 -->
             <div v-if="item.key === 'consult' && page === 'consult'" class="side-sub">
               <button type="button" class="new-chat-btn" @click="startNewConversation">
                 <Plus :size="15" />
@@ -67,7 +67,7 @@
                     </button>
                   </div>
                 </template>
-                <p v-else class="consult-hint">最近 7 天暂无咨询记录</p>
+                <p v-else class="consult-hint">最近 30 天暂无咨询记录</p>
               </div>
             </div>
           </template>
@@ -234,7 +234,7 @@ const onReviewList = (payload) => {
 const messages = ref([]);
 const inputText = ref('');
 const isLoading = ref(false);
-// 会话列表（服务端按天存储，仅返回最近 7 天）
+// 会话列表（服务端按天存储，这里取最近 30 天）
 const sessions = ref([]);
 const sessionsLoading = ref(false);
 // 当前打开的会话ID：空串表示「新对话」，首次回答时由服务端生成并下发
@@ -249,22 +249,41 @@ const applySessionId = (id) => {
 
 const CONSULT_HISTORY_MAX = 6;
 
-/** 把会话列表按天分组（列表已按时间倒序，同一天的记录天然相邻） */
+/**
+ * 把最近 30 天的会话分成「今天 / 7 天内 / 30 天内」三组（互斥）
+ *
+ * 边界按自然日计算：今天 = 0 天前，7 天内 = 1~6 天前，30 天内 = 7~29 天前。
+ * 组内保持时间倒序平铺；空组不渲染，避免出现只有标题的空白分区。
+ */
 const sessionGroups = computed(() => {
-  const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  // 用本地零点做差，避免时分秒导致跨天的记录被算进相邻分组
+  const startOfDay = (dateStr) => {
+    const [year, month, day] = String(dateStr || '').split('-').map(Number);
+    const value = new Date(year, (month || 1) - 1, day || 1);
+    value.setHours(0, 0, 0, 0);
+    return value;
+  };
   const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  const namedDays = { [dayKey(today)]: '今天', [dayKey(yesterday)]: '昨天' };
+  today.setHours(0, 0, 0, 0);
 
-  const groups = [];
-  for (const item of sessions.value) {
-    const label = namedDays[item.date] || item.date;
-    const last = groups[groups.length - 1];
-    if (last && last.label === label) last.items.push(item);
-    else groups.push({ label, items: [item] });
+  // 服务端已按时间倒序返回，这里再排一次，保证分桶后每组内部仍是倒序
+  const ordered = [...sessions.value].sort(
+    (a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`)
+  );
+
+  const buckets = { today: [], week: [], month: [] };
+  for (const item of ordered) {
+    const offset = Math.round((today - startOfDay(item.date)) / 86400000);
+    if (offset === 0) buckets.today.push(item);
+    else if (offset > 0 && offset < 7) buckets.week.push(item);
+    else if (offset >= 7 && offset < 30) buckets.month.push(item);
   }
-  return groups;
+
+  return [
+    { label: '今天', items: buckets.today },
+    { label: '7 天内', items: buckets.week },
+    { label: '30 天内', items: buckets.month }
+  ].filter((group) => group.items.length > 0);
 });
 
 // ---------------- 通用工具 ----------------
@@ -425,11 +444,11 @@ const toBubbles = (list) => (Array.isArray(list) ? list : [])
     timestamp: toTimestamp(m.time)
   }));
 
-/** 拉取最近 7 天的会话列表 */
+/** 拉取最近 30 天的会话列表（后端接口上限即 30 天） */
 const loadSessions = async () => {
   sessionsLoading.value = true;
   try {
-    const res = await request.get('/get_history/list');
+    const res = await request.get('/get_history/list', { params: { days: 30 } });
     if (res.data?.success && Array.isArray(res.data.sessions)) {
       sessions.value = res.data.sessions;
       return res.data.sessions;
@@ -501,7 +520,7 @@ onUnmounted(() => {
 });
 
 onMounted(async () => {
-  // 先取最近 7 天的会话列表，再打开「上次浏览的会话」；
+  // 先取最近 30 天的会话列表，再打开「上次浏览的会话」；
   // 该会话已被删除或不在展示窗口内时，退回最近一个会话，避免白屏
   const list = await loadSessions();
   const savedSessionId = localStorage.getItem(SESSION_KEY) || '';
