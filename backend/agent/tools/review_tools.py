@@ -45,9 +45,11 @@ _store_lock = threading.Lock()
 
 @dataclass
 class AgentContext:
-    """Agent 单次运行的上下文（目前只有数据隔离键）。"""
+    """Agent 单次运行的上下文（数据隔离键 + 观测关联 id）。"""
 
     owner: str = ''
+    # 观测用：让工具执行层能把这次调用记进同一条 consult_trace
+    trace_id: str = ''
 
 
 def _get_store() -> ReviewStore:

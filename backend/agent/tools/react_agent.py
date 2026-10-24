@@ -320,7 +320,8 @@ class ReactAgent:
         response = chat_model.invoke(payload)
         return response.content if hasattr(response, 'content') else str(response)
 
-    def execute_stream(self, query: str, history=None, _retried: bool = False, owner: str = ''):
+    def execute_stream(self, query: str, history=None, _retried: bool = False,
+                       owner: str = '', trace_id: str = ''):
         """
         流式执行查询，返回AI生成的增量内容
         
@@ -387,13 +388,13 @@ class ReactAgent:
             # 尝试获取流式响应
             stream_iterator = None
             try:
-                stream_iterator = self._agent.stream(input_dict, config=AGENT_RUN_CONFIG, context={'owner': owner}, stream_mode="messages")
+                stream_iterator = self._agent.stream(input_dict, config=AGENT_RUN_CONFIG, context={'owner': owner, 'trace_id': trace_id}, stream_mode="messages")
                 print("[ReactAgent] 成功获取流式迭代器")
             except Exception as e:
                 print(f"[ReactAgent] 获取流式迭代器失败: {str(e)}")
                 # 尝试不使用stream_mode参数
                 try:
-                    stream_iterator = self._agent.stream(input_dict, config=AGENT_RUN_CONFIG, context={'owner': owner})
+                    stream_iterator = self._agent.stream(input_dict, config=AGENT_RUN_CONFIG, context={'owner': owner, 'trace_id': trace_id})
                     print("[ReactAgent] 尝试不使用stream_mode参数成功")
                 except Exception as e2:
                     print(f"[ReactAgent] 再次尝试获取流式迭代器失败: {str(e2)}")
@@ -471,7 +472,7 @@ class ReactAgent:
                 # 尝试使用非流式方式作为备用
                 try:
                     print("[ReactAgent] 尝试非流式执行作为备用")
-                    response = self._agent.invoke(input_dict, config=AGENT_RUN_CONFIG, context={'owner': owner})
+                    response = self._agent.invoke(input_dict, config=AGENT_RUN_CONFIG, context={'owner': owner, 'trace_id': trace_id})
                     if response:
                         # invoke 返回的是最终状态：{"messages": [SystemMessage, ..., AIMessage]}
                         # 最终回答在最后一条 AIMessage 里
@@ -540,7 +541,7 @@ class ReactAgent:
                     print(f"[ReactAgent] 重建Agent失败: {str(re)}")
                     yield "抱歉，服务暂时不可用，请稍后重试。"
                     return
-                for chunk in self.execute_stream(query, history, _retried=True, owner=owner):
+                for chunk in self.execute_stream(query, history, _retried=True, owner=owner, trace_id=trace_id):
                     yield chunk
                 return
             # 其他 RuntimeError：直接调用模型兜底
@@ -578,7 +579,7 @@ class ReactAgent:
                 print(f"[ReactAgent] 最终备用方案也失败: {str(e2)}")
                 yield "抱歉，服务暂时不可用，请稍后重试。"
 
-    def execute(self, query: str, history=None, owner: str = '') -> str:
+    def execute(self, query: str, history=None, owner: str = '', trace_id: str = '') -> str:
         """
         非流式执行查询，返回完整响应
         
@@ -592,7 +593,7 @@ class ReactAgent:
             ServiceUnavailableError - 当AI服务不可用时抛出
         """
         response = ""
-        for chunk in self.execute_stream(query, history, owner=owner):
+        for chunk in self.execute_stream(query, history, owner=owner, trace_id=trace_id):
             response += chunk
         return response
     

@@ -1,8 +1,11 @@
+import time
+
 from langchain.agents import AgentState
 from langchain.agents.middleware import wrap_tool_call, wrap_model_call, before_model
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from typing import Callable
+from utils import consult_trace
 from utils.logger_handler import logger
 from langgraph.types import Command
 from langgraph.runtime import Runtime
@@ -22,6 +25,23 @@ def _tool_result_count(state):
     """统计本轮已产生的工具结果条数（Agent 状态里的 ToolMessage）。"""
     messages = state.get('messages') if isinstance(state, dict) else getattr(state, 'messages', None)
     return sum(1 for message in (messages or []) if isinstance(message, ToolMessage))
+
+
+def _trace_id(request: ToolCallRequest) -> str:
+    """
+    取本次请求的观测 id。
+
+    来源是 Agent 的 runtime context（由 ReactAgent 注入）而不是 contextvars：
+    工具可能在别的线程执行，contextvar 会丢；runtime context 一定拿得到。
+    """
+    context = getattr(getattr(request, 'runtime', None), 'context', None)
+    return getattr(context, 'trace_id', '') or ''
+
+
+def _result_chars(result) -> int:
+    """工具返回的正文长度（Command 之类没有 content 的按 0 记）。"""
+    content = getattr(result, 'content', None)
+    return len(content) if isinstance(content, str) else 0
 
 
 @wrap_tool_call
@@ -46,11 +66,22 @@ def monitor_tool(
             name=request.tool_call.get('name'),
         )
 
+    trace_id = _trace_id(request)
+    started = time.monotonic()
     try:
         result = handler(request)
+        # 每次工具调用都记进同一条 trace：工具触发率、空结果率、耗时都靠它算
+        consult_trace.record_tool(
+            trace_id, request.tool_call.get('name'),
+            request.tool_call.get('args'), (time.monotonic() - started) * 1000,
+            True, _result_chars(result))
         logger.info(f"[tool monitor]工具{request.tool_call['name']}调用成功")
         return result
     except Exception as e:
+        consult_trace.record_tool(
+            trace_id, request.tool_call.get('name'),
+            request.tool_call.get('args'), (time.monotonic() - started) * 1000,
+            False, 0)
         logger.error(f"工具{request.tool_call['name']}调用失败，原因：{str(e)}")
         raise e
 

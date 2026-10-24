@@ -26,6 +26,7 @@ from services import consult_context
 from utils.standard_loader import load_unified_standard
 from utils.chat_memory import build_history_block
 from utils.model_fallback import system_message
+from utils import consult_trace
 import logging
 import re
 
@@ -605,7 +606,7 @@ class ConsultationService:
 
     def _generate_ai_response(self, question: str, history=None, owner: str = '',
                               role: str = 'auto', student: str = '',
-                              memory_block: str = '') -> str:
+                              memory_block: str = '', trace_id: str = '') -> str:
         """
         使用AI模型生成回答
 
@@ -653,8 +654,21 @@ class ConsultationService:
         except Exception as exc:
             logger.error(f"[AI响应生成] 参考资料装配失败，降级为无资料回答: {exc}")
 
+        # 观测：检索范围/命中数/分数/实际检索问句（trace 已开启时才记）
+        if trace_id and context:
+            debug = context.get('debug') or {}
+            consult_trace.mark_context(
+                trace_id,
+                scope=context.get('scope') or '',
+                n_cases=context.get('n_cases') or 0,
+                top_scores=debug.get('top_scores') or [],
+                case_query=debug.get('case_query') or '',
+            )
+
         prompt_core = self._build_consultation_prompt(question, context=context, memory_block=memory_block)
         prompt_full = self._build_consultation_prompt(question, history, context=context, memory_block=memory_block)
+        # 观测：上下文成本（主提示词 + 记忆块字符数）
+        consult_trace.mark_prompt(trace_id, len(prompt_core), len(memory_block or ''))
         logger.info(
             f"[AI响应生成] 提示词长度: 主路径 {len(prompt_core)} / 含记忆 {len(prompt_full)}"
         )
@@ -669,7 +683,7 @@ class ConsultationService:
             if self._agent is None:
                 logger.warning("[AI响应生成] ReactAgent为None，跳过此方式")
             else:
-                for chunk in self._agent.execute_stream(prompt_core, history, owner=owner):
+                for chunk in self._agent.execute_stream(prompt_core, history, owner=owner, trace_id=trace_id):
                     chunk_count += 1
                     if chunk:
                         response += chunk
@@ -685,6 +699,9 @@ class ConsultationService:
                 
         except Exception as e:
             logger.error(f"[AI响应生成] 使用ReactAgent失败: {str(e)}")
+
+        # 走到这里说明 Agent 没给出内容：标记降级，便于统计降级率
+        consult_trace.mark_degraded(trace_id, 'agent_empty_or_failed')
         
         # 方式2：尝试直接调用聊天模型（完整提示词）
         try:
@@ -725,7 +742,7 @@ class ConsultationService:
     
     def _generate_ai_response_stream(self, question: str, history=None, owner: str = '',
                                      role: str = 'auto', student: str = '',
-                                     memory_block: str = '') -> Iterator[Tuple[str, str]]:
+                                     memory_block: str = '', trace_id: str = '') -> Iterator[Tuple[str, str]]:
         """
         流式生成AI回答（yield 增量文本）
 
@@ -750,8 +767,20 @@ class ConsultationService:
         except Exception as exc:
             logger.error(f"[AI响应生成-流式] 参考资料装配失败，降级为无资料回答: {exc}")
 
+        # 观测（与非流式一致）：检索范围、命中数、上下文成本
+        if trace_id and context:
+            debug = context.get('debug') or {}
+            consult_trace.mark_context(
+                trace_id,
+                scope=context.get('scope') or '',
+                n_cases=context.get('n_cases') or 0,
+                top_scores=debug.get('top_scores') or [],
+                case_query=debug.get('case_query') or '',
+            )
+
         prompt_core = self._build_consultation_prompt(question, context=context, memory_block=memory_block)
         prompt_full = self._build_consultation_prompt(question, history, context=context, memory_block=memory_block)
+        consult_trace.mark_prompt(trace_id, len(prompt_core), len(memory_block or ''))
 
         # 方式1：尝试使用ReactAgent（逐 token 流式）
         try:
@@ -759,7 +788,7 @@ class ConsultationService:
                 logger.warning("[AI响应生成-流式] ReactAgent为None，跳过此方式")
             else:
                 total = ""
-                for chunk in self._agent.execute_stream(prompt_core, history, owner=owner):
+                for chunk in self._agent.execute_stream(prompt_core, history, owner=owner, trace_id=trace_id):
                     if chunk:
                         total += chunk
                         yield ('delta', chunk)
@@ -769,6 +798,9 @@ class ConsultationService:
                 logger.warning("[AI响应生成-流式] ReactAgent返回空响应，尝试备用方式")
         except Exception as e:
             logger.error(f"[AI响应生成-流式] 使用ReactAgent失败: {str(e)}")
+
+        # Agent 没给内容才走到这里：标记降级
+        consult_trace.mark_degraded(trace_id, 'agent_empty_or_failed')
 
         # 方式2：尝试直接调用聊天模型（完整提示词，整段产出）
         try:
@@ -882,7 +914,8 @@ class ConsultationService:
         return prompt
     
     def answer_question(self, question: str, history=None, owner: str = '',
-                        role: str = 'auto', student: str = '', memory_block: str = '') -> Dict[str, Any]:
+                        role: str = 'auto', student: str = '', memory_block: str = '',
+                        trace_id: str = '') -> Dict[str, Any]:
         """
         回答用户咨询问题（核心入口方法）
 
@@ -964,7 +997,7 @@ class ConsultationService:
         logger.info("[咨询服务] 使用AI模型生成回答")
         ai_response = self._generate_ai_response(cleaned_question, history,
                                                  owner=owner, role=role, student=student,
-                                                 memory_block=memory_block)
+                                                 memory_block=memory_block, trace_id=trace_id)
 
         return {
             'success': True,
@@ -973,8 +1006,8 @@ class ConsultationService:
         }
     
     def stream_answer_question(self, question: str, history=None, owner: str = '',
-                               role: str = 'auto', student: str = '',
-                               memory_block: str = '') -> Iterator[Dict[str, Any]]:
+                               role: str = 'auto', student: str = '', memory_block: str = '',
+                               trace_id: str = '') -> Iterator[Dict[str, Any]]:
         """
         流式回答用户咨询问题（SSE 逐块产出）
 
@@ -1018,7 +1051,7 @@ class ConsultationService:
         logger.info("[咨询服务-流式] 使用AI流式生成回答")
         for kind, piece in self._generate_ai_response_stream(
                 cleaned_question, history, owner=owner, role=role, student=student,
-                memory_block=memory_block):
+                memory_block=memory_block, trace_id=trace_id):
             if kind == 'delta':
                 yield {'type': 'delta', 'content': piece, 'response_type': 'ai'}
             elif kind == 'error':
@@ -1051,7 +1084,7 @@ consultation_service = ConsultationService()
 
 def answer_consultation(question: str, history=None, owner: str = '',
                         role: str = 'auto', student: str = '',
-                        memory_block: str = '') -> Dict[str, Any]:
+                        memory_block: str = '', trace_id: str = '') -> Dict[str, Any]:
     """
     咨询服务便捷函数（对外暴露的接口）
 
@@ -1085,12 +1118,12 @@ def answer_consultation(question: str, history=None, owner: str = '',
     """
     return consultation_service.answer_question(question, history,
                                                 owner=owner, role=role, student=student,
-                                                memory_block=memory_block)
+                                                memory_block=memory_block, trace_id=trace_id)
 
 
 def stream_answer_consultation(question: str, history=None, owner: str = '',
                                role: str = 'auto', student: str = '',
-                               memory_block: str = '') -> Iterator[Dict[str, Any]]:
+                               memory_block: str = '', trace_id: str = '') -> Iterator[Dict[str, Any]]:
     """
     咨询服务流式便捷函数（对外暴露的接口，供 /chat stream=true 调用）
 
@@ -1099,4 +1132,4 @@ def stream_answer_consultation(question: str, history=None, owner: str = '',
     """
     return consultation_service.stream_answer_question(question, history,
                                                        owner=owner, role=role, student=student,
-                                                       memory_block=memory_block)
+                                                       memory_block=memory_block, trace_id=trace_id)

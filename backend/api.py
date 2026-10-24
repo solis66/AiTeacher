@@ -46,6 +46,7 @@ from services import consult_context
 from services import user_service
 from services import memory_service
 from utils import db_config
+from utils import consult_trace
 from utils.chat_memory import normalize_history
 from utils.file_lock import file_lock
 from utils.logger_handler import logger
@@ -1319,6 +1320,9 @@ def chat():
     if user_selected_essay_type and not validate_essay_type(user_selected_essay_type):
         return json_error('无效的作文类型', '作文类型只能是：议论文、记叙文或说明文')
 
+    # 观测：trace 在咨询分支里开启；这里先占位，保证外层异常分支也能拿到。
+    trace_id = ''
+
     try:
         # 使用新的文本分类器判断文本类型
         text_type, detected_essay_type = classify_text(message)
@@ -1365,6 +1369,8 @@ def chat():
             parsed['essayType'] = parsed.get('essay_type', essay_type)
             parsed['response_type'] = 'essay_review'
         elif text_type == 'consultation':
+            # 观测：每个咨询请求一条 trace，结束时落一行 logs/consult_trace.jsonl
+            trace_id = consult_trace.start(current_user)
             # 滚动摘要 + 长期记忆：只读注入，读取失败就当没有记忆，绝不影响本次回答。
             # 放在咨询分支内而不是更外层：粘贴作文走的是批改流程，不该为它多算一次记忆检索。
             memory_block = ''
@@ -1386,14 +1392,20 @@ def chat():
 
                     parts = []
                     failed = False
+                    first_token_marked = False
                     yield frame({'type': 'session', 'session_id': stream_session_id})
                     try:
                         for evt in stream_answer_consultation(
                                 message, history, owner=current_user, role=role,
-                                student=student_hint, memory_block=memory_block):
+                                student=student_hint, memory_block=memory_block,
+                                trace_id=trace_id):
                             evt_type = evt.get('type')
                             if evt_type == 'delta':
                                 parts.append(evt.get('content') or '')
+                                # 首字延迟要落在真实产出第一个 token 的时刻，而不是请求结束
+                                if not first_token_marked:
+                                    consult_trace.mark_first_token(trace_id)
+                                    first_token_marked = True
                             elif evt_type == 'error':
                                 failed = True
                             elif evt_type == 'done':
@@ -1414,6 +1426,10 @@ def chat():
                         # 摘要与长期记忆都要调模型，放后台线程，不拖慢回答
                         memory_service.schedule_refresh(
                             current_user, persisted_id, load_session(current_user, persisted_id))
+                    # 观测：在 done 之前收尾，保证前端断开时 trace 也已落盘
+                    consult_trace.finish(
+                        trace_id, answer_chars=len(''.join(parts)),
+                        error='stream_error' if failed else '')
                     yield frame({'type': 'done'})
 
                 sse_resp = Response(_consult_stream(), mimetype='text/event-stream')
@@ -1425,7 +1441,8 @@ def chat():
             # 咨询类问题，使用新的咨询服务（携带本会话最近的对话轮次与学情检索范围）
             consult_result = answer_consultation(message, history,
                                                  owner=current_user, role=role,
-                                                 student=student_hint, memory_block=memory_block)
+                                                 student=student_hint, memory_block=memory_block,
+                                                 trace_id=trace_id)
             
             if consult_result['success']:
                 response = consult_result['content']
@@ -1464,6 +1481,10 @@ def chat():
             session_id = append_chat_turn(current_user, session_id, message, response)
             memory_service.schedule_refresh(
                 current_user, session_id, load_session(current_user, session_id))
+            # 非流式没有首字概念，first_token_ms 留空；总耗时由 finish 计算
+            consult_trace.finish(
+                trace_id, answer_chars=len(response or ''),
+                error='' if consult_result['success'] else 'consult_failed')
         else:
             # 未知类型，降级到原有的咨询方式
             logger.warning(f"[Chat] 文本类型未知({text_type})，使用原有咨询方式")
@@ -1494,14 +1515,18 @@ def chat():
     except ValueError as e:
         logger.warning(f"[Chat] 数据验证错误: {str(e)}")
         logger.warning(traceback.format_exc())
+        # 观测：异常也要收尾，否则登记表只能等超时清理，错误率也没法统计
+        consult_trace.finish(trace_id, error=f'ValueError: {e}')
         return json_error('数据验证错误', f'数据验证失败: {str(e)}')
     except ServiceUnavailableError as e:
         logger.error(f"[Chat] 服务不可用: {str(e)}")
         logger.error(traceback.format_exc())
+        consult_trace.finish(trace_id, error=f'ServiceUnavailable: {e}')
         return json_error('服务不可用', f'AI服务暂时不可用，请稍后重试: {str(e)}', status=503)
     except Exception as e:
         logger.error(f"[Chat] 处理请求时发生错误: {str(e)}")
         logger.error(traceback.format_exc())
+        consult_trace.finish(trace_id, error=f'{type(e).__name__}: {e}')
         return json_error('服务器内部错误', '处理请求时出现错误，请稍后重试', status=500)
 
 
