@@ -78,6 +78,19 @@ def _pick_owner() -> str:
         return ''
 
 
+def _valid_score(record):
+    """记录的整数总分；未评分（None/非整数）返回 None，避免模板渲染出 None。"""
+    score = (record.get('result') or {}).get('score')
+    return score if isinstance(score, int) else None
+
+
+def _essay_type_of(record):
+    """体裁取值口径与 review_tools/_record 保持一致：result 优先，回退 input。"""
+    result = record.get('result') or {}
+    inp = record.get('input') or {}
+    return (result.get('essay_type') or inp.get('essay_type') or '').strip()
+
+
 def _build_vars(records, student):
     """
     从真实记录里取模板变量。
@@ -85,6 +98,11 @@ def _build_vars(records, student):
     只取「student 归属为该账号本人」的记录：账号下可能代传过别人的作文，
     学情画像与回答口径都只统计本人，模板若取了别人的篇目，断言就会对不上
     （实测：owner 名下 7 篇完成记录，但属于本人学生的只有 4 篇）。
+
+    另有两类变量刻意用「owner 全量」口径：
+        review_date / review_date_score / essay_type_max_score
+    因为 search_reviews 按 owner 过滤（含代传记录），以工具实际能看到的数据为准，
+    否则断言会跟工具返回对不上。
     """
     done = [
         record for record in records
@@ -94,19 +112,55 @@ def _build_vars(records, student):
     titled = [r for r in done if len(((r.get('input') or {}).get('title') or '').strip()) >= 3]
     types = {}
     for record in done:
-        result = record.get('result') or {}
-        inp = record.get('input') or {}
-        essay_type = (result.get('essay_type') or inp.get('essay_type') or '').strip()
+        essay_type = _essay_type_of(record)
         if essay_type:
             types[essay_type] = types.get(essay_type, 0) + 1
+
+    # 学情画像按时间升序统计：平均分/最高/最低/最近一次都必须与页源头一致
+    ordered = sorted(done, key=lambda record: record.get('created_at') or '')
+    scores = [score for score in (_valid_score(record) for record in ordered) if score is not None]
+    avg = round(sum(scores) / len(scores), 1) if scores else None
+
     latest = titled[0] if titled else None
     score = (latest or {}).get('result', {}).get('score')
+    essay_type = max(types, key=types.get) if types else ''
+
+    # 按天分组，挑「当天只有一篇」的最近日期：模型无法按具体日期过滤，
+    # 同一天多篇时它只能靠列表里的人工比对，断言会带上不必要的歧义。
+    owner_done = [
+        record for record in records
+        if record.get('status') == 'done' and record.get('result')
+    ]
+    by_day = {}
+    for record in owner_done:
+        day = (record.get('created_at') or '')[:10]
+        if day:
+            by_day.setdefault(day, []).append(record)
+    unique_days = sorted((day for day, items in by_day.items() if len(items) == 1), reverse=True)
+
+    review_date = unique_days[0] if unique_days else ''
+    review_date_score = _valid_score(by_day[review_date][0]) if review_date else None
+
+    typed_scores = [
+        value for value in (
+            _valid_score(record) for record in owner_done
+            if essay_type and _essay_type_of(record) == essay_type
+        ) if value is not None
+    ]
+
     return {
         'title': ((latest or {}).get('input') or {}).get('title') or '',
         # score 为 None 时置空串：否则模板会渲染成「为什么只有 None 分」
         'score': '' if score is None else score,
-        'essay_type': max(types, key=types.get) if types else '',
+        'essay_type': essay_type,
         'n_reviews': len(done),
+        # 平均分用 :g 去掉无意义的 .0，避免「42.0」与模型口头的「42 分」对不上
+        'avg_score': '' if avg is None else f'{avg:g}',
+        'best_score': max(scores) if scores else '',
+        'worst_score': min(scores) if scores else '',
+        'review_date': review_date,
+        'review_date_score': '' if review_date_score is None else review_date_score,
+        'essay_type_max_score': max(typed_scores) if typed_scores else '',
     }
 
 
@@ -179,6 +233,20 @@ def _judge(case, answer, trace, variables):
         wanted = _render(term, variables)
         if wanted and wanted not in answer:
             reasons.append(f'回答缺少「{wanted}」')
+    # 任一命中即可：用于「没有查到 / 未找到」这类同义表述，避免措辞不同就误判
+    any_terms = [
+        term for term in (_render(item, variables) for item in (expect.get('answer_contains_any') or []))
+        if term
+    ]
+    if any_terms and not any(term in answer for term in any_terms):
+        reasons.append(f"回答不含任一预期表述（{'/'.join(any_terms)}）")
+    for term in expect.get('answer_not_contains') or []:
+        forbidden = _render(term, variables)
+        if forbidden and forbidden in answer:
+            reasons.append(f"回答出现了不应包含的「{forbidden}」")
+    min_chars = int(expect.get('min_answer_chars') or 0)
+    if min_chars and len(answer.strip()) < min_chars:
+        reasons.append(f'回答过短（{len(answer.strip())} < {min_chars}）')
     if expect.get('no_degraded') and trace.get('degraded'):
         reasons.append('走了降级路径')
     if expect.get('no_error') and trace.get('error'):
