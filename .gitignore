@@ -29,6 +29,8 @@ review_index_state.json
 **/data/reviews/
 # 同时覆盖 SQLite 的 -wal / -shm 伴生文件（WAL 模式下运行时会产生）
 *.sqlite3*
+# 评测运行结果（每次跑都会生成，属于运行产物）
+backend/evals/results/
 
 # IDE / 工具状态
 .idea/

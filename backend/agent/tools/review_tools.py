@@ -137,6 +137,7 @@ def _essay_type(record: Dict) -> str:
 @tool(description=(
     '检索当前账号（提问者本人）的批改记录，可按体裁、分数区间、最近天数、关键词筛选。'
     '返回每条记录的 id、日期、题目、体裁、分数与主要问题。'
+    '问「最低分/最高分」时用 order=score_asc / score_desc，一次即可定位，不要反复换条件检索。'
     '需要查看某一篇的完整批改时，把返回的 id 传给 review_detail。'
     '只能查提问者本人的记录，无法查询他人。'
 ))
@@ -146,7 +147,8 @@ def search_reviews(runtime: ToolRuntime[AgentContext],
                    min_score: int = 0,
                    max_score: int = 0,
                    days: int = 0,
-                   limit: int = DEFAULT_SEARCH_LIMIT) -> str:
+                   limit: int = DEFAULT_SEARCH_LIMIT,
+                   order: str = 'recent') -> str:
     """
     检索本人的批改记录。
 
@@ -156,6 +158,7 @@ def search_reviews(runtime: ToolRuntime[AgentContext],
     @param {int} max_score - 最高总分，0 表示不限
     @param {int} days - 只看最近 N 天，0 表示不限
     @param {int} limit - 返回条数，默认 5，上限 8
+    @param {string} order - 排序：recent（默认）/ score_asc（低分优先）/ score_desc（高分优先）
     """
     owner = _owner(runtime)
     if not owner:
@@ -168,6 +171,7 @@ def search_reviews(runtime: ToolRuntime[AgentContext],
     max_score = int(max_score or 0)
     days = int(days or 0)
     limit = max(1, min(int(limit or DEFAULT_SEARCH_LIMIT), MAX_SEARCH_LIMIT))
+    order = (order or 'recent').strip().lower()
     deadline = datetime.now() - timedelta(days=days) if days > 0 else None
 
     matched = []
@@ -191,9 +195,19 @@ def search_reviews(runtime: ToolRuntime[AgentContext],
             hits = sum(1 for term in normalized_keywords if term and term in haystack)
             if hits == 0:
                 continue
-        matched.append({'record': record, 'hits': hits, 'created': record.get('created_at') or ''})
+        matched.append({'record': record, 'hits': hits, 'score': score,
+                        'created': record.get('created_at') or ''})
 
-    matched.sort(key=lambda item: (item['hits'], item['created']), reverse=True)
+    # 排序：给关键词时先按命中数；order 明确要求按分数时以分数为准。
+    # 「最低/最高分」是高频问法，让模型一次定位即可，避免它反复换条件检索把预算耗光。
+    if order == 'score_asc':
+        matched.sort(key=lambda item: (item['score'] if item['score'] is not None else 999,
+                                       item['created']))
+    elif order == 'score_desc':
+        matched.sort(key=lambda item: (item['score'] if item['score'] is not None else -1,
+                                       item['created']), reverse=True)
+    else:
+        matched.sort(key=lambda item: (item['hits'], item['created']), reverse=True)
     if not matched:
         return '没有找到符合条件的批改记录。可放宽分数区间/时间范围，或去掉关键词再试。'
 

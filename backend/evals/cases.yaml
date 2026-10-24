@@ -1,0 +1,78 @@
+# 咨询 Agent 种子评测用例
+#
+# 用法：cd backend && .venv/Scripts/python.exe evals/run.py --owner <账号>
+#
+# 设计说明：
+#   1. 只断言"可自动判定"的行为（工具是否调用、是否降级、事实是否对得上），
+#      不评判回答写得好不好——后者交给人工抽检。
+#   2. 需要具体篇目的用例用模板从账号真实记录里取（{title}/{score}/{essay_type}），
+#      **不造数据**；取不到时该用例记为 skipped 而不是失败。
+#   3. `query_template` 与 `answer_contains` 里的占位符都会被真实记录替换。
+
+cases:
+  # ---------------------------------------------------------------- 工具触发
+  - id: general-no-record-tools
+    query: "考场上写作文，时间应该怎么分配比较合理？"
+    tags: [tool-use, general]
+    note: 通用方法问题：资料已在上下文，不应为了让回答"更稳"去查个人记录
+    expect:
+      tools_exclude: [search_reviews, review_detail]
+      no_error: true
+
+  - id: knowledge-not-retrieved
+    query: "议论文的论据和论点之间应该怎么建立联系？"
+    tags: [tool-use, knowledge]
+    note: 小语料已全文注入，不应再调 search_knowledge（会白花一次调用）
+    expect:
+      tools_exclude: [search_knowledge]
+      no_error: true
+
+  - id: single-review-detail
+    query_template: "我那篇《{title}》为什么只有{score}分？"
+    tags: [tool-use, single-review]
+    note: 提到具体篇目 → 必须先定位再查看详情
+    expect:
+      tools_include: [search_reviews, review_detail]
+      answer_contains: ["{score}"]
+      no_degraded: true
+      no_error: true
+
+  - id: filter-by-essay-type
+    query_template: "我所有{essay_type}作文分别多少分？"
+    tags: [tool-use, filter]
+    note: 按体裁翻找 → 必须用 search_reviews
+    expect:
+      tools_include: [search_reviews]
+      no_error: true
+
+  - id: lowest-score-detail
+    query: "我得分最低的是哪一篇？那篇的五个维度分别多少分？"
+    tags: [tool-use, single-review]
+    note: 要"具体哪一篇 + 单篇维度" → 搜索 + 详情
+    expect:
+      tools_include: [search_reviews, review_detail]
+      no_error: true
+
+  - id: latest-review-detail
+    query: "我最近那篇作文，老师在开头部分指出了什么问题？"
+    tags: [tool-use, single-review]
+    note: 不依赖标题也能跑；单篇问题必须先定位再查详情
+    expect:
+      tools_include: [search_reviews, review_detail]
+      no_error: true
+
+  # ---------------------------------------------------------------- 事实一致
+  - id: profile-count
+    query: "我一共提交过几篇作文？平均分是多少？"
+    tags: [fact, profile]
+    note: 篇数必须与系统统计一致（学情画像已提供，不需要再查记录）
+    expect:
+      tools_exclude: [search_reviews, review_detail]
+      answer_contains: ["{n_reviews}"]
+      no_error: true
+
+  # ---------------------------------------------------------------- 数据隔离
+  - id: isolation-other-owner
+    check: tool_isolation
+    tags: [isolation]
+    note: 用他人记录 id 调详情必须查不到；检索结果只能来自本人
