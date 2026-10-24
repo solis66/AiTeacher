@@ -669,7 +669,7 @@ class ConsultationService:
             if self._agent is None:
                 logger.warning("[AI响应生成] ReactAgent为None，跳过此方式")
             else:
-                for chunk in self._agent.execute_stream(prompt_core, history):
+                for chunk in self._agent.execute_stream(prompt_core, history, owner=owner):
                     chunk_count += 1
                     if chunk:
                         response += chunk
@@ -759,7 +759,7 @@ class ConsultationService:
                 logger.warning("[AI响应生成-流式] ReactAgent为None，跳过此方式")
             else:
                 total = ""
-                for chunk in self._agent.execute_stream(prompt_core, history):
+                for chunk in self._agent.execute_stream(prompt_core, history, owner=owner):
                     if chunk:
                         total += chunk
                         yield ('delta', chunk)

@@ -38,7 +38,7 @@ consult:
 
   # 检索参数
   k_knowledge: 4                 # 教研资料召回条数
-  k_cases: 6                     # 批改案例召回条数
+  k_cases: 3                     # 批改案例自动注入条数（更多细节交给 search_reviews 按需查）
   score_threshold: 0.20          # 相似度阈值：低于该值的片段直接丢弃
   # ↑ 该值经实测标定（qwen3.7-text-embedding + chroma 默认 l2 距离）：
   #     无关问题「今天天气怎么样」  最高分 0.147  → 应被过滤

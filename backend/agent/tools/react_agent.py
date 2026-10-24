@@ -16,6 +16,7 @@ from model.factory import chat_model, get_chat_model, is_model_initialized
 from utils.prompt_loader import load_system_prompts
 from utils.model_fallback import system_message, to_chat_messages
 from agent.tools.agent_tools import search_knowledge
+from agent.tools.review_tools import AgentContext, review_detail, search_reviews
 from agent.tools.middleware import monitor_tool, log_before_model, limit_tools_after_budget
 from utils.error_handler import ServiceUnavailableError
 from langgraph.errors import GraphRecursionError
@@ -113,7 +114,11 @@ class ReactAgent:
             self._agent = create_agent(
                 model=chat_model,
                 system_prompt=load_system_prompts(),
-                tools=[search_knowledge],
+                # 三个工具分工：知识库检索 + 本人批改记录检索 + 单篇批改详情。
+                tools=[search_knowledge, search_reviews, review_detail],
+                # owner 走运行时上下文注入：模型可见的入参里没有账号字段，
+                # 它无法指定要查谁——数据隔离靠机制，不靠提示词。
+                context_schema=AgentContext,
                 # limit_tools_after_budget：工具预算用完后摘掉工具定义，
                 # 确保模型收尾作答——否则它会反复检索，把图步数耗到 recursion_limit。
                 middleware=[monitor_tool, limit_tools_after_budget, log_before_model],
@@ -315,7 +320,7 @@ class ReactAgent:
         response = chat_model.invoke(payload)
         return response.content if hasattr(response, 'content') else str(response)
 
-    def execute_stream(self, query: str, history=None, _retried: bool = False):
+    def execute_stream(self, query: str, history=None, _retried: bool = False, owner: str = ''):
         """
         流式执行查询，返回AI生成的增量内容
         
@@ -382,13 +387,13 @@ class ReactAgent:
             # 尝试获取流式响应
             stream_iterator = None
             try:
-                stream_iterator = self._agent.stream(input_dict, config=AGENT_RUN_CONFIG, stream_mode="messages")
+                stream_iterator = self._agent.stream(input_dict, config=AGENT_RUN_CONFIG, context={'owner': owner}, stream_mode="messages")
                 print("[ReactAgent] 成功获取流式迭代器")
             except Exception as e:
                 print(f"[ReactAgent] 获取流式迭代器失败: {str(e)}")
                 # 尝试不使用stream_mode参数
                 try:
-                    stream_iterator = self._agent.stream(input_dict, config=AGENT_RUN_CONFIG)
+                    stream_iterator = self._agent.stream(input_dict, config=AGENT_RUN_CONFIG, context={'owner': owner})
                     print("[ReactAgent] 尝试不使用stream_mode参数成功")
                 except Exception as e2:
                     print(f"[ReactAgent] 再次尝试获取流式迭代器失败: {str(e2)}")
@@ -466,7 +471,7 @@ class ReactAgent:
                 # 尝试使用非流式方式作为备用
                 try:
                     print("[ReactAgent] 尝试非流式执行作为备用")
-                    response = self._agent.invoke(input_dict, config=AGENT_RUN_CONFIG)
+                    response = self._agent.invoke(input_dict, config=AGENT_RUN_CONFIG, context={'owner': owner})
                     if response:
                         # invoke 返回的是最终状态：{"messages": [SystemMessage, ..., AIMessage]}
                         # 最终回答在最后一条 AIMessage 里
@@ -535,7 +540,7 @@ class ReactAgent:
                     print(f"[ReactAgent] 重建Agent失败: {str(re)}")
                     yield "抱歉，服务暂时不可用，请稍后重试。"
                     return
-                for chunk in self.execute_stream(query, history, _retried=True):
+                for chunk in self.execute_stream(query, history, _retried=True, owner=owner):
                     yield chunk
                 return
             # 其他 RuntimeError：直接调用模型兜底
@@ -573,7 +578,7 @@ class ReactAgent:
                 print(f"[ReactAgent] 最终备用方案也失败: {str(e2)}")
                 yield "抱歉，服务暂时不可用，请稍后重试。"
 
-    def execute(self, query: str, history=None) -> str:
+    def execute(self, query: str, history=None, owner: str = '') -> str:
         """
         非流式执行查询，返回完整响应
         
@@ -587,7 +592,7 @@ class ReactAgent:
             ServiceUnavailableError - 当AI服务不可用时抛出
         """
         response = ""
-        for chunk in self.execute_stream(query, history):
+        for chunk in self.execute_stream(query, history, owner=owner):
             response += chunk
         return response
     
