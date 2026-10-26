@@ -79,7 +79,7 @@ cases:
   - id: intro-fast-path
     query: "你能做什么？"
     tags: [path, greeting]
-    note: 自我介绍走固定应答，应说明能批改作文，且不调用工具
+    note: 自我介绍/功能类问题交给模型，能力范围已注入提示词，应说明能批改作文且不调用工具
     expect:
       tools_exclude: [search_knowledge, search_reviews, review_detail]
       answer_contains: ["批改"]
