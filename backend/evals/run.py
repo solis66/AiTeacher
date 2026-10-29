@@ -1,10 +1,10 @@
 """
 咨询 Agent 评测 harness
 
-用法（工作目录 backend/）：
-    .venv/Scripts/python.exe evals/run.py --owner admin
-    .venv/Scripts/python.exe evals/run.py --owner admin --tag tool-use
-    .venv/Scripts/python.exe evals/run.py --cases evals/cases.yaml --limit 5
+用法（工作目录 backend/，Linux/服务器）：
+    .venv/bin/python evals/run.py --owner admin
+    .venv/bin/python evals/run.py --owner admin --tag tool-use
+    .venv/bin/python evals/run.py --cases evals/cases.yaml --limit 5
 
 设计：
     只断言可自动判定的行为（工具是否调用、是否降级、事实是否对得上），

@@ -1,9 +1,9 @@
 # 咨询 Agent 种子评测用例（30 条）
 #
-# 用法：cd backend && .venv/Scripts/python.exe evals/run.py --owner <账号>
-#       .venv/Scripts/python.exe evals/run.py --owner admin --other-owner <第二账号>
-#       .venv/Scripts/python.exe evals/run.py --tag tool-use
-#       .venv/Scripts/python.exe evals/run.py --case latest-review-detail
+# 用法（Linux/服务器）：cd backend && .venv/bin/python evals/run.py --owner <账号>
+#       .venv/bin/python evals/run.py --owner admin --other-owner <第二账号>
+#       .venv/bin/python evals/run.py --tag tool-use
+#       .venv/bin/python evals/run.py --case latest-review-detail
 #
 # 设计说明：
 #   1. 只断言"可自动判定"的行为（工具是否调用、是否降级、事实是否对得上），
@@ -25,6 +25,9 @@
 # check: tool_isolation           : 确定性越权检查（不调模型）
 #
 # 单轮工具预算由 harness 统一校验：超过 3 次直接判失败（与 config/agent.yaml 对齐）。
+# 单条用例 docker compose exec backend python evals/run.py --owner admin --case latest-review-detail
+# 结果文件持久化 docker cp $(docker compose ps -q backend):/app/evals/results ./eval-results
+
 
 cases:
   # ================================================================ 通用问答 / 快速路径
