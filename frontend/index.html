@@ -8,7 +8,14 @@
       （原先引的是 Vite 脚手架默认的 /vite.svg，但 public/ 目录并不存在，浏览器一直 404。）
     -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      移动端视口：
+      - width=device-width：按设备宽度排版，避免移动端按 980px 虚拟视口缩放后整页变小
+      - viewport-fit=cover：刘海屏/挖孔屏下启用 env(safe-area-inset-*)，供底部安全区留白使用
+      - interactive-widget=resizes-content：安卓 Chrome 弹出软键盘时压缩可视高度（而非只平移视口），
+        保证底部输入框/提交按钮不被键盘盖住（不支持的浏览器会忽略该字段）
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>AI智能批改工作台</title>
   </head>
   <body>

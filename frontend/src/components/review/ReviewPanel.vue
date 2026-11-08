@@ -642,4 +642,13 @@ const copy = async (text) => {
 @media (max-width: 1280px) {
   .review-panel { width: 340px; }
 }
+
+/*
+ * 手机端：面板作为覆盖抽屉展示，宽度必须收敛到可视宽度（340px 在 320~360 屏上仍会溢出被裁），
+ * 底部 padding 同时避让 iOS home 指示条。
+ */
+@media (max-width: 768px) {
+  .review-panel { width: min(340px, 100vw); max-width: 100vw; }
+  .panel-body { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+}
 </style>

@@ -1,5 +1,5 @@
 <template>
-  <div id="app">
+  <div class="app-root">
     <!-- 登录页面 -->
     <LoginPage
       v-if="!isLoggedIn"
@@ -61,7 +61,18 @@ html, body {
   background-color: var(--c-bg);
 }
 
+/*
+ * 高度链：#app（index.html 挂载点）→ .app-root（本组件根节点）都必须撑满，
+ * 否则子页面的 height:100% 会退化成内容高度，滚动容器失效、底部内容被裁掉。
+ *
+ * 注意：这里曾把根节点也写成 id="app"，与 index.html 的挂载点形成重复 ID，
+ * 属于非法 DOM，会让高度规则命中两层不同节点，故改为 class。
+ */
 #app {
+  height: 100%;
+}
+
+.app-root {
   height: 100%;
 }
 </style>

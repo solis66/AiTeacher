@@ -179,4 +179,21 @@ onMounted(loadProfile);
 
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/*
+ * 移动端：5 列统计卡在手机上每列不足 60px，数字与标签被压成竖排；
+ * 改为两列网格，维度行缩减标签/数值列宽，避免横向溢出。
+ */
+@media (max-width: 768px) {
+  .report-page { padding: 16px 14px calc(24px + env(safe-area-inset-bottom)); }
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .stat-card { padding: 12px; }
+  .card-block { padding: 14px; }
+  .dim-row { grid-template-columns: 52px minmax(0, 1fr) 86px; gap: 8px; }
+}
+
+@media (max-width: 400px) {
+  .dim-row { grid-template-columns: 1fr; gap: 4px; }
+  .dim-meta { text-align: left; }
+}
 </style>

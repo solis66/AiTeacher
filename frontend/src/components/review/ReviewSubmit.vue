@@ -353,4 +353,20 @@ const resetForm = () => { essays.splice(0, essays.length, essayTemplate()); };
 .submit-btn { min-width: 160px; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/*
+ * 移动端：整页的内边距、模式切换与表单一并收窄。
+ * mode-switch 原来是 inline-flex + 不换行，窄屏下两个长文案只能逐字竖排（截图中的竖条），
+ * 这里改为占满整行、等分宽度并允许内部换行。
+ */
+@media (max-width: 768px) {
+  .submit-page { padding: 16px 14px calc(24px + env(safe-area-inset-bottom)); }
+  .mode-switch { display: flex; width: 100%; margin-bottom: 14px; }
+  .mode-btn { flex: 1; padding: 8px 6px; line-height: 1.35; white-space: normal; word-break: break-word; }
+  .essay-card { padding: 14px; }
+  .form-row { gap: 10px; }
+  .body-box { min-height: 120px; }
+  .submit-footer { align-items: stretch; }
+  .submit-btn { width: 100%; }
+}
 </style>

@@ -2,7 +2,7 @@
   <section class="review-workbench">
     <!-- ==================== 顶部操作栏（固定） ==================== -->
     <header class="ui-topbar">
-      <button type="button" class="ui-btn ui-btn--ghost" @click="$emit('back')">
+      <button type="button" class="ui-btn ui-btn--ghost" title="返回首页" @click="$emit('back')">
         <ArrowLeft :size="15" /><span>返回首页</span>
       </button>
 
@@ -15,7 +15,7 @@
       </div>
 
       <div class="topbar-actions">
-        <button type="button" class="ui-btn" :disabled="!canExport" @click="exportAs('pdf')">
+        <button type="button" class="ui-btn" :disabled="!canExport" title="导出 PDF" @click="exportAs('pdf')">
           <FileDown :size="14" /><span>导出PDF</span>
         </button>
         <button
@@ -28,7 +28,7 @@
         >
           <PanelRightOpen :size="16" />
         </button>
-        <button type="button" class="ui-btn ui-btn--primary" :disabled="!dirty || saving || !canEdit" @click="save">
+        <button type="button" class="ui-btn ui-btn--primary" :disabled="!dirty || saving || !canEdit" title="保存修改" @click="save">
           <Save :size="14" /><span>{{ saving ? '保存中…' : '保存修改' }}</span>
         </button>
       </div>
@@ -518,7 +518,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload));
 .wb-toast {
   position: fixed;
   left: 50%;
-  bottom: 72px;
+  bottom: calc(72px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   padding: 7px 16px;
   font-size: var(--fs-sm);
@@ -526,6 +526,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload));
   background: rgba(32, 33, 36, .88);
   border-radius: var(--r-pill);
   z-index: 4000;
+  max-width: calc(100vw - 24px);
 }
 
 /* 窄屏：右侧栏改为覆盖式抽屉，优先保留原文阅读空间 */
@@ -537,7 +538,55 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload));
     bottom: 0;
     z-index: 30;
     box-shadow: var(--shadow-2);
+    max-width: 100%;
   }
   .workbench-body { position: relative; }
+}
+
+/*
+ * 移动端：
+ * - 顶栏按钮只保留图标（文案隐藏但补了 title，便于长按/读屏识别），否则一行放不下、右侧动作按钮被裁掉；
+ * - 右栏抽屉宽度收敛到可视宽度内（原来固定 380px，360px 屏幕下会被切掉一截）；
+ * - 画布底栏隐藏保存状态，避免缩放/翻页按钮组溢出。
+ */
+@media (max-width: 768px) {
+  .ui-topbar { padding: 0 8px; gap: 6px; }
+  .ui-topbar > .ui-btn { padding: 0 8px; }
+  .ui-topbar > .ui-btn span,
+  .topbar-actions .ui-btn span { display: none; }
+  .topbar-title { flex: 1; margin-left: 0; gap: 6px; }
+  .title-text { max-width: 96px; }
+  .title-meta { display: none; }
+  .topbar-actions { gap: 4px; }
+
+  .panel-slot { width: min(var(--panel-width), 100%); }
+
+  .ui-toolbar {
+    height: calc(var(--toolbar-height) + env(safe-area-inset-bottom));
+    gap: 0;
+    padding: 0 4px env(safe-area-inset-bottom);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* 收窄图标按钮与读数占位：7 个按钮 + 两个读数在 320~360 宽内仍能排下 */
+  .ui-toolbar .ui-icon-btn { width: 28px; height: 28px; }
+  /* 触屏没有 hover，且 overflow 会把悬浮提示裁掉，移动端直接关闭工具提示 */
+  .ui-toolbar .ui-icon-btn[data-tip]::after { display: none; }
+  .ui-toolbar__divider { flex-shrink: 0; margin: 0 4px; }
+  .zoom-value,
+  .page-value { min-width: 28px; }
+  .toolbar-right { display: none; }
+}
+
+@media (max-width: 420px) {
+  .title-text { max-width: 68px; }
+}
+
+/* 320px 级小屏：进一步收窄底栏控件，保证 7 个工具按钮无需横向滚动即可全部点到 */
+@media (max-width: 360px) {
+  .ui-toolbar .ui-icon-btn { width: 26px; height: 26px; }
+  .ui-toolbar__divider { margin: 0 3px; }
+  .zoom-value,
+  .page-value { min-width: 26px; font-size: 11px; }
 }
 </style>

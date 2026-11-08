@@ -375,6 +375,7 @@ const handleSubmit = async () => {
 <style scoped>
 .login-page {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -631,5 +632,17 @@ const handleSubmit = async () => {
   .login-card {
     padding: 28px 24px;
   }
+}
+
+/*
+ * 手机端：
+ * - 上下内边距叠加安全区，横屏/刘海屏下卡片不被状态栏与 home 指示条压住；
+ * - 输入框字号提到 16px，规避 iOS Safari 聚焦输入框时强制放大页面（放大后右侧内容出屏）。
+ */
+@media (max-width: 768px) {
+  .login-page {
+    padding: calc(20px + env(safe-area-inset-top)) 18px calc(20px + env(safe-area-inset-bottom));
+  }
+  .form-input { font-size: 16px; }
 }
 </style>

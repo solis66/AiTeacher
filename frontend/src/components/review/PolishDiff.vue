@@ -238,8 +238,10 @@ const rows = computed(() => {
 .seg-del { color: var(--c-del); text-decoration: line-through; }
 
 @media (max-width: 900px) {
-  .diff-overlay { padding: 10px; }
-  .diff-dialog { height: 88vh; }
+  .diff-overlay {
+    padding: calc(10px + env(safe-area-inset-top)) 10px calc(10px + env(safe-area-inset-bottom));
+  }
+  .diff-dialog { height: 88vh; height: 88dvh; max-height: 100%; }
   .diff-body { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
   .diff-col + .diff-col { border-left: none; border-top: 1px solid var(--c-border); }
   .diff-legend { display: none; }

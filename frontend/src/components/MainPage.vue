@@ -2,6 +2,18 @@
   <div class="app-shell">
     <!-- ===================== 顶部导航栏 ===================== -->
     <header class="app-navbar">
+      <!-- 移动端导航抽屉开关：桌面端由 CSS 隐藏 -->
+      <button
+        type="button"
+        class="nav-menu-btn"
+        :aria-expanded="sidebarOpen ? 'true' : 'false'"
+        aria-label="打开功能导航"
+        @click="sidebarOpen = !sidebarOpen"
+      >
+        <X v-if="sidebarOpen" :size="20" />
+        <Menu v-else :size="20" />
+      </button>
+
       <div class="navbar-brand">
         <span class="brand-logo"><GraduationCap :size="20" /></span>
         <span class="brand-name">AI智能批改工作台</span>
@@ -15,7 +27,10 @@
       </div>
     </header>
 
-    <div class="app-body">
+    <div class="app-body" :class="{ 'sidebar-open': sidebarOpen }">
+      <!-- 移动端抽屉遮罩：点击关闭导航；桌面端不渲染样式 -->
+      <div v-if="sidebarOpen" class="sidebar-backdrop" @click="sidebarOpen = false"></div>
+
       <!-- ===================== 左侧边栏 ===================== -->
       <aside class="app-sidebar">
         <nav class="sidebar-nav" aria-label="功能导航">
@@ -164,7 +179,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import {
   Calculator, ClipboardList, BarChart3, MessagesSquare,
-  GraduationCap, Send, Loader2, AlertCircle, Plus, Users
+  GraduationCap, Send, Loader2, AlertCircle, Plus, Users, Menu, X
 } from 'lucide-vue-next';
 import request from '../api/request.js';
 import {
@@ -214,6 +229,8 @@ const page = ref(initialPage);
 const activeReviewId = ref(localStorage.getItem(REVIEW_KEY) || null);
 const fullscreenImage = ref(null);
 const errorMessage = ref('');
+// 移动端左侧导航以抽屉形式展示（<=768px 生效），桌面端该状态不产生任何布局变化
+const sidebarOpen = ref(false);
 
 // ---------------- 批改结果：作文列表（由 ReviewWorkbench 回传，展示在侧边栏） ----------------
 const reviewItems = ref([]);
@@ -299,6 +316,8 @@ const go = (key) => {
   if (key === 'admin-users' && !isAdmin.value) key = 'submit';
   page.value = key;
   localStorage.setItem(PAGE_KEY, key);
+  // 移动端抽屉里点选导航后立即收起，避免遮住刚打开的内容
+  sidebarOpen.value = false;
 };
 
 // ---------------- 视图切换 ----------------
@@ -465,6 +484,7 @@ const loadSessions = async () => {
 const openSession = async (session) => {
   const sessionId = session?.session_id;
   if (!sessionId) return;
+  sidebarOpen.value = false;
   currentSessionId.value = sessionId;
   localStorage.setItem(SESSION_KEY, sessionId);
   messages.value = [];
@@ -478,6 +498,7 @@ const openSession = async (session) => {
 
 /** 开启新对话：清空当前会话，首次提问时由服务端生成新会话ID */
 const startNewConversation = () => {
+  sidebarOpen.value = false;
   currentSessionId.value = '';
   localStorage.removeItem(SESSION_KEY);
   messages.value = [];
@@ -535,22 +556,48 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.app-shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+/*
+ * 应用外壳高度：
+ * 移动端浏览器地址栏/工具栏会动态伸缩，100vh 取的是「工具栏收起后的最大高度」，
+ * 直接用它会让底部一截（提交按钮、输入框）被浏览器工具栏盖住。
+ * 因此优先使用 dvh（动态视口高度，随工具栏实时变化），不支持时回落到 100vh。
+ */
+.app-shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
 
 /* 顶部导航栏 */
 .app-navbar {
-  height: var(--app-navbar-height);
+  height: calc(var(--app-navbar-height) + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 24px;
-  padding: 0 20px;
+  padding-left: 20px;
+  padding-right: 20px;
   background: var(--c-surface);
   border-bottom: 1px solid var(--c-border);
 }
-.navbar-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--c-text); }
-.brand-logo { display: grid; place-items: center; width: 32px; height: 32px; color: #fff; background: var(--c-primary); border-radius: var(--r-md); }
-.navbar-user { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+/* 移动端抽屉开关：桌面端隐藏，窄屏由下方媒体查询打开 */
+.nav-menu-btn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 18px;
+  color: var(--c-text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-md);
+  cursor: pointer;
+}
+.nav-menu-btn:active { background: var(--c-bg-muted); }
+.navbar-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--c-text); min-width: 0; }
+.brand-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brand-logo { display: grid; place-items: center; flex-shrink: 0; width: 32px; height: 32px; color: #fff; background: var(--c-primary); border-radius: var(--r-md); }
+.navbar-user { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .user-avatar { display: grid; place-items: center; width: 28px; height: 28px; font-size: var(--fs-sm); font-weight: 600; color: #fff; background: var(--c-primary); border-radius: 50%; }
 .user-name { font-size: var(--fs-sm); color: var(--c-text); }
 /* 账号类型标识：管理员用主色、学生用中性色，一眼区分当前登录身份 */
@@ -561,7 +608,10 @@ onMounted(async () => {
 .logout-btn:hover { color: var(--c-error); border-color: var(--c-error); }
 
 /* 主体：侧边栏 + 内容 */
-.app-body { flex: 1; display: flex; min-height: 0; }
+.app-body { flex: 1; display: flex; min-width: 0; min-height: 0; }
+
+/* 移动端抽屉遮罩：桌面端不显示，也不参与 flex 布局 */
+.sidebar-backdrop { display: none; }
 
 .app-sidebar {
   width: var(--app-sidebar-width);
@@ -619,19 +669,87 @@ onMounted(async () => {
 .send-btn { width: 44px; flex-shrink: 0; }
 
 .error-toast {
-  position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%);
+  position: fixed; left: 50%; bottom: calc(72px + env(safe-area-inset-bottom)); transform: translateX(-50%);
   display: flex; align-items: center; gap: 8px;
   padding: 9px 16px; font-size: var(--fs-sm); color: #fff;
   background: rgba(32, 33, 36, .9); border-radius: var(--r-pill); z-index: 4000;
+  max-width: calc(100vw - 24px);
 }
 .error-icon { color: #f5b301; }
 .error-close { border: none; background: none; color: #fff; font-size: 16px; cursor: pointer; line-height: 1; }
 
-.fullscreen-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .75); display: grid; place-items: center; z-index: 5000; }
+.fullscreen-overlay {
+  position: fixed; inset: 0; z-index: 5000;
+  background: rgba(0, 0, 0, .75);
+  display: grid; place-items: center;
+  /* 全屏预览同样避让刘海与home指示条，避免关闭按钮落在屏幕外 */
+  padding: calc(12px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right))
+           calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
+}
 .fullscreen-content { position: relative; max-width: 90vw; max-height: 90vh; }
 .fullscreen-img { max-width: 90vw; max-height: 90vh; border-radius: var(--r-md); }
 .fullscreen-close { position: absolute; top: -14px; right: -14px; width: 30px; height: 30px; border: none; border-radius: 50%; background: #fff; font-size: 16px; cursor: pointer; }
 
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/*
+ * ============================================================================
+ * 移动端适配（<= 768px）
+ * ----------------------------------------------------------------------------
+ * 根因：桌面布局是「固定 248px 侧边栏 + flex:1 内容区」，手机 375~430px 宽时
+ * 内容区只剩 130~180px，再叠加 .app-main{overflow:hidden}，右侧内容被直接裁掉，
+ * 表现为截图里的「只显示一条窄缝、文字逐字换行」。
+ * 处理：侧边栏在移动端脱离文档流变为抽屉浮层，主内容区独占整宽，从布局上消除挤压。
+ * ============================================================================
+ */
+@media (max-width: 768px) {
+  .app-navbar { gap: 8px; padding-left: 10px; padding-right: 10px; }
+  .nav-menu-btn { display: inline-flex; }
+  .navbar-brand { flex: 1; gap: 6px; }
+  .brand-logo { width: 28px; height: 28px; }
+  .brand-name { font-size: 15px; }
+  .navbar-user { margin-left: 0; gap: 6px; }
+  /* 用户全名在窄屏隐藏，保留头像 + 身份徽标 + 退出，避免头部撑出横向滚动 */
+  .user-name { display: none; }
+  .logout-btn { padding: 5px 9px; }
+
+  /* 侧边栏 → 抽屉：固定在导航栏下方，默认平移出屏，不占内容宽度 */
+  .app-sidebar {
+    position: fixed;
+    top: calc(var(--app-navbar-height) + env(safe-area-inset-top));
+    left: 0;
+    bottom: 0;
+    width: min(300px, 84vw);
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform .22s ease;
+    box-shadow: var(--shadow-3);
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .app-body.sidebar-open .app-sidebar { transform: translateX(0); }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    top: calc(var(--app-navbar-height) + env(safe-area-inset-top));
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 55;
+    background: rgba(9, 17, 53, .38);
+  }
+
+  .app-main { width: 100%; }
+  .side-sub .history-section { max-height: 38vh; }
+  /* 对话输入框避让 iOS 底部 home 指示条 */
+  .consult-input { padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
+}
+
+@media (max-width: 420px) {
+  .brand-name { font-size: 14px; }
+  .role-badge { padding: 1px 6px; }
+}
 </style>

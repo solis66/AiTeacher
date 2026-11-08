@@ -751,4 +751,22 @@ onUnmounted(() => {
   .dim-row { grid-template-columns: 48px 1fr 104px; }
   .modal-overlay { padding: 12px; }
 }
+
+/* 手机端：页面内边距收敛、维度行改为两段式，弹层高度改用 dvh 以适配地址栏伸缩 */
+@media (max-width: 768px) {
+  .admin-users-page { padding: 16px 14px calc(24px + env(safe-area-inset-bottom)); }
+  .stat-grid { gap: 10px; }
+  .card-block { padding: 14px; }
+  .dim-row { grid-template-columns: 48px minmax(0, 1fr); }
+  .dim-meta { grid-column: 1 / -1; text-align: left; }
+  .modal-overlay {
+    padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
+  }
+  .modal {
+    max-width: 100%;
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+  .modal-body { padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
+}
 </style>
